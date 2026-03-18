@@ -14,21 +14,1223 @@
     ::-webkit-scrollbar-track { background: #0a0c10; }
     ::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
     input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
-    .loading-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: 'DM Sans', system-ui; color: #7a8299; }
+    .loading-screen { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: 'DM Sans', system-ui; color: #7a8299; gap: 12px; }
+    .loading-screen .spinner { width: 32px; height: 32px; border: 3px solid #1e2330; border-top-color: #3e6ae1; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-screen { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: 'DM Sans', system-ui; color: #ef4444; gap: 8px; padding: 20px; text-align: center; }
   </style>
 </head>
 <body>
-  <div id="root"><div class="loading-screen">A carregar...</div></div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <div id="root">
+    <div class="loading-screen">
+      <div class="spinner"></div>
+      <div>A carregar plataforma...</div>
+    </div>
+  </div>
+
   <script>
+    window.onerror = function(msg, src, line, col, err) {
+      document.getElementById('root').innerHTML = '<div class="error-screen"><div style="font-size:18px;font-weight:700;">Erro ao carregar</div><div style="color:#7a8299;font-size:13px;">' + msg + '</div><div style="color:#4a5168;font-size:11px;">Linha: ' + line + '</div></div>';
+    };
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.10/babel.min.js"></script>
+
+  <script>
+    // Initialize Supabase after library loads
     window.supabaseClient = window.supabase.createClient(
       'https://furzhavvpfskozxdsuvwq.supabase.co',
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1cnpoYXZ2cGZza296eGRzdXZ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4NjQ1NTYsImV4cCI6MjA4OTQ0MDU1Nn0.hDqbR7PFQtrtk5CQRSYi6x2jO7HHJoO8T5eOINTsZzU'
     );
   </script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" src="app.jsx"></script>
+
+  <script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect, useRef, useCallback } = React;
+
+
+
+const DEFAULT_LOCATIONS = ["CE Lisboa", "CE Gaia", "CAP"];
+const STATUSES = ["Livre", "Emprestado", "Inativo"];
+const FUEL_TYPES = ["Elétrico", "Gasolina", "Diesel", "Híbrido", "Híbrido Plug-in"];
+const COLORS_EXT = ["Branco", "Preto", "Cinzento", "Azul", "Vermelho", "Verde", "Castanho", "Prata", "Laranja"];
+const COLORS_INT = ["Preto", "Cinzento", "Castanho", "Bege", "Branco"];
+const ROLES = { admin: "Admin", editor: "Editor", viewer: "Viewer" };
+
+
+
+// ─── Maintenance check (km only, synced with car.km) ───
+function getMaintenanceStatus(car) {
+  if (car.fuel !== "Gasolina" || car.status === "Inativo") return null;
+  const lastSvc = car.lastServiceKm || 0;
+  const km = car.km || 0;
+  const kmSinceService = km - lastSvc;
+  // If maintenance was dismissed at current km level, don't show alert
+  if (car.maintDismissedAtKm && car.maintDismissedAtKm >= lastSvc + 9000) return null;
+  if (kmSinceService >= 10000) return { type: "danger", msg: `Manutenção ultrapassada — ${(kmSinceService - 10000).toLocaleString("pt-PT")} km acima` };
+  if (kmSinceService >= 9000) return { type: "warning", msg: `Manutenção próxima — faltam ${(10000 - kmSinceService).toLocaleString("pt-PT")} km` };
+  return null;
+}
+
+// ─── Palette ───
+const T = {
+  bg: "#0a0c10", surface: "#12151c", surfaceHover: "#1a1e28", card: "#161a24",
+  border: "#1e2330", borderLight: "#2a3040", text: "#e8eaf0", textMuted: "#7a8299", textDim: "#4a5168",
+  accent: "#3e6ae1", accentSoft: "rgba(62,106,225,0.12)",
+  free: "#22c55e", freeSoft: "rgba(34,197,94,0.1)", freeBorder: "rgba(34,197,94,0.25)",
+  busy: "#f59e0b", busySoft: "rgba(245,158,11,0.1)", busyBorder: "rgba(245,158,11,0.25)",
+  inactive: "#64748b", inactiveSoft: "rgba(100,116,139,0.1)", inactiveBorder: "rgba(100,116,139,0.25)",
+  danger: "#ef4444", dangerSoft: "rgba(239,68,68,0.08)", dangerBorder: "rgba(239,68,68,0.25)",
+  warnSoft: "rgba(245,158,11,0.08)", warnBorder: "rgba(245,158,11,0.25)",
+};
+const font = "'DM Sans', 'Segoe UI', system-ui, sans-serif";
+const fontMono = "'JetBrains Mono', 'SF Mono', monospace";
+
+const HyundaiLogo = ({ width = 140 }) => (
+  <svg width={width} height={width * 38.99 / 283.46} viewBox="0 0 283.46 38.9961" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs><clipPath id="hc0"><path clipRule="nonzero" d="M 276 5 L 282.921875 5 L 282.921875 34 L 276 34 Z"/></clipPath><clipPath id="hc1"><path clipRule="nonzero" d="M 0 0.0351562 L 76 0.0351562 L 76 38.957031 L 0 38.957031 Z"/></clipPath></defs>
+    <path fill="#fff" d="M 108.664062 5.535156 L 108.664062 16.171875 L 96.601562 16.171875 L 96.601562 5.535156 L 89.953125 5.535156 L 89.953125 33.460938 L 96.601562 33.460938 L 96.601562 22.230469 L 108.664062 22.230469 L 108.664062 33.460938 L 115.3125 33.460938 L 115.3125 5.535156 Z"/>
+    <path fill="#fff" d="M 139.683594 5.535156 L 132.726562 16.59375 L 125.777344 5.535156 L 117.933594 5.535156 L 129.410156 23.789062 L 129.410156 33.460938 L 136.050781 33.460938 L 136.050781 23.789062 L 147.53125 5.535156 Z"/>
+    <path fill="#fff" d="M 168.917969 5.535156 L 168.917969 26.007812 C 168.917969 26.785156 168.332031 27.414062 167.503906 27.414062 L 156.847656 27.414062 L 156.847656 5.535156 L 150.199219 5.535156 L 150.199219 33.460938 L 169.84375 33.460938 C 171.59375 33.460938 173 32.941406 174.023438 31.921875 C 175.039062 30.902344 175.554688 29.496094 175.554688 27.757812 L 175.554688 5.535156 Z"/>
+    <path fill="#fff" d="M 201.367188 5.535156 L 181.71875 5.535156 L 181.71875 33.460938 L 188.363281 33.460938 L 188.363281 11.582031 L 199.027344 11.582031 C 199.882812 11.582031 200.4375 12.25 200.4375 12.980469 L 200.4375 33.460938 L 207.074219 33.460938 L 207.074219 11.242188 C 207.074219 9.496094 206.554688 8.09375 205.542969 7.074219 C 204.511719 6.050781 203.113281 5.535156 201.367188 5.535156"/>
+    <path fill="#fff" d="M 231.949219 13.027344 L 231.949219 25.96875 C 231.949219 26.722656 231.394531 27.414062 230.53125 27.414062 L 219.875 27.414062 L 219.875 11.582031 L 230.488281 11.582031 C 231.359375 11.582031 231.949219 12.191406 231.949219 13.027344 M 232.886719 5.535156 L 213.238281 5.535156 L 213.238281 33.460938 L 232.886719 33.460938 C 234.628906 33.460938 236.027344 32.941406 237.050781 31.925781 C 238.074219 30.898438 238.589844 29.496094 238.589844 27.757812 L 238.589844 11.246094 C 238.589844 9.496094 238.074219 8.09375 237.050781 7.070312 C 236.027344 6.050781 234.625 5.535156 232.886719 5.535156"/>
+    <path fill="#fff" d="M 263.171875 11.582031 L 263.171875 18.773438 L 251.097656 18.773438 L 251.097656 13 C 251.097656 12.3125 251.628906 11.582031 252.515625 11.582031 Z M 250.171875 5.535156 C 248.425781 5.535156 247.015625 6.050781 246.003906 7.074219 C 244.976562 8.097656 244.464844 9.5 244.464844 11.246094 L 244.464844 33.460938 L 251.097656 33.460938 L 251.097656 24.820312 L 263.171875 24.820312 L 263.171875 33.460938 L 269.808594 33.460938 L 269.808594 5.535156 Z"/>
+    <g clipPath="url(#hc0)"><path fill="#fff" d="M 276.28125 33.460938 L 282.925781 33.460938 L 282.925781 5.535156 L 276.28125 5.535156 Z"/></g>
+    <g clipPath="url(#hc1)"><path fill="#fff" d="M 24.066406 4.496094 C 24.859375 4.34375 25.382812 4.34375 25.570312 4.546875 C 25.679688 4.671875 25.714844 4.882812 25.566406 5.144531 C 25.480469 5.285156 25.394531 5.410156 25.234375 5.597656 C 18.515625 13.519531 13.402344 25.199219 11.945312 28.574219 C 11.839844 28.804688 11.726562 29.035156 11.640625 29.1875 C 11.507812 29.425781 11.324219 29.621094 11.003906 29.640625 C 10.824219 29.652344 10.582031 29.609375 10.210938 29.382812 C 5.75 26.636719 3.101562 23.207031 3.101562 19.492188 C 3.101562 12.78125 11.726562 7.011719 24.066406 4.496094 M 30.957031 9.542969 C 31.589844 8.078125 32.679688 4.941406 35.1875 3.691406 C 35.945312 3.316406 36.882812 3.136719 37.722656 3.109375 C 37.910156 3.105469 38.042969 3.109375 38.097656 3.109375 C 45.113281 3.109375 51.640625 4.082031 57.109375 5.75 C 57.148438 5.761719 57.277344 5.8125 57.316406 5.828125 C 57.820312 5.996094 58.078125 6.226562 58.078125 6.515625 C 58.078125 6.765625 57.945312 6.953125 57.765625 7.132812 C 57.6875 7.207031 57.574219 7.308594 57.417969 7.4375 C 56.160156 8.492188 52.359375 11.238281 45.203125 13.976562 C 42.6875 14.941406 39.550781 16.132812 36.265625 16.828125 C 34.328125 17.238281 27.179688 18.324219 30.957031 9.542969 M 64.34375 9.792969 C 64.476562 9.558594 64.65625 9.359375 64.984375 9.339844 C 65.164062 9.328125 65.40625 9.371094 65.773438 9.597656 C 70.238281 12.34375 72.878906 15.773438 72.878906 19.488281 C 72.878906 26.199219 64.253906 31.964844 51.921875 34.488281 C 51.128906 34.640625 50.601562 34.636719 50.421875 34.4375 C 50.296875 34.3125 50.265625 34.097656 50.421875 33.835938 C 50.5 33.699219 50.589844 33.574219 50.75 33.378906 C 57.46875 25.457031 62.585938 13.78125 64.039062 10.410156 C 64.148438 10.175781 64.257812 9.945312 64.34375 9.792969 M 45.144531 29.40625 C 44.511719 30.875 43.421875 34.015625 40.917969 35.261719 C 40.160156 35.636719 39.222656 35.820312 38.382812 35.84375 C 38.191406 35.851562 38.058594 35.84375 38 35.84375 C 30.988281 35.84375 24.460938 34.871094 19 33.207031 C 18.953125 33.195312 18.828125 33.144531 18.789062 33.128906 C 18.285156 32.960938 18.027344 32.726562 18.027344 32.441406 C 18.027344 32.1875 18.15625 32 18.339844 31.824219 C 18.414062 31.746094 18.53125 31.648438 18.683594 31.515625 C 19.945312 30.464844 23.742188 27.710938 30.902344 24.972656 C 33.414062 24.015625 36.550781 22.820312 39.84375 22.125 C 41.769531 21.71875 48.925781 20.625 45.144531 29.40625 M 37.996094 38.953125 C 58.980469 38.953125 75.988281 30.242188 75.988281 19.492188 C 75.988281 8.75 58.980469 0.0390625 37.996094 0.0390625 C 17.011719 0.0390625 0 8.75 0 19.492188 C 0 30.242188 17.011719 38.953125 37.996094 38.953125"/></g>
+  </svg>
+);
+
+const Icon = ({ d, size = 18, color = T.textMuted, style: s = {} }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={s}><path d={d} /></svg>
+);
+const Icons = {
+  car: "M7 17h.01M17 17h.01M3 12h1l2.5-5a2 2 0 011.8-1.1h5.4a2 2 0 011.8 1.1L18 12h3v4a1 1 0 01-1 1h-1a2 2 0 01-4 0H9a2 2 0 01-4 0H4a1 1 0 01-1-1v-4z",
+  search: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z", filter: "M3 4h18l-7 8v5l-4 2V12z",
+  clock: "M12 2a10 10 0 100 20 10 10 0 000-20zm0 6v4l3 3", chart: "M18 20V10M12 20V4M6 20v-6",
+  pin: "M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1118 0z M12 13a3 3 0 100-6 3 3 0 000 6z",
+  check: "M5 13l4 4L19 7", x: "M18 6L6 18M6 6l12 12", plus: "M12 5v14M5 12h14",
+  edit: "M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7 M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4z",
+  back: "M19 12H5M12 19l-7-7 7-7", km: "M9 20l-5.4-5.4a8 8 0 1111.3 0L9.5 20",
+  upload: "M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12",
+  settings: "M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z M12 15a3 3 0 100-6 3 3 0 000 6z",
+  wrench: "M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z",
+  alert: "M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z",
+  archive: "M21 8v13H3V8M1 3h22v5H1zM10 12h4",
+  user: "M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z",
+  logout: "M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9",
+  users: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
+};
+
+const Badge = ({ children, color, bg, border }) => (
+  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, color, background: bg, border: `1px solid ${border}`, fontFamily: font, whiteSpace: "nowrap" }}>
+    <span style={{ width: 6, height: 6, borderRadius: "50%", background: color }} />{children}
+  </span>
+);
+const StatusBadge = ({ status }) => {
+  if (status === "Livre") return <Badge color={T.free} bg={T.freeSoft} border={T.freeBorder}>Livre</Badge>;
+  if (status === "Emprestado") return <Badge color={T.busy} bg={T.busySoft} border={T.busyBorder}>Emprestado</Badge>;
+  return <Badge color={T.inactive} bg={T.inactiveSoft} border={T.inactiveBorder}>Inativo</Badge>;
+};
+const statusColor = (s) => s === "Livre" ? T.free : s === "Emprestado" ? T.busy : T.inactive;
+const statusSoft = (s) => s === "Livre" ? T.freeSoft : s === "Emprestado" ? T.busySoft : T.inactiveSoft;
+
+const LocationBadge = ({ loc }) => loc ? (
+  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 500, color: T.textMuted, background: "rgba(255,255,255,0.04)", border: `1px solid ${T.border}`, fontFamily: font }}>
+    <Icon d={Icons.pin} size={12} color={T.textMuted} />{loc}
+  </span>
+) : null;
+
+const MaintBadge = ({ alert: a }) => {
+  if (!a) return null;
+  const isDanger = a.type === "danger";
+  return (
+    <span title={a.msg} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 600, color: isDanger ? T.danger : T.busy, background: isDanger ? T.dangerSoft : T.warnSoft, border: `1px solid ${isDanger ? T.dangerBorder : T.warnBorder}`, fontFamily: font, cursor: "default" }}>
+      <Icon d={Icons.wrench} size={11} color={isDanger ? T.danger : T.busy} />Manutenção
+    </span>
+  );
+};
+
+const StatCard = ({ label, value, sub, icon, color = T.accent, onClick, active }) => (
+  <div onClick={onClick} style={{
+    background: T.surface, border: `1px solid ${active ? color : T.border}`, borderRadius: 12,
+    padding: "20px 22px", flex: 1, minWidth: 130, position: "relative", overflow: "hidden",
+    cursor: onClick ? "pointer" : "default", transition: "all 0.15s",
+    boxShadow: active ? `0 0 16px ${color}18` : "none",
+  }}>
+    <div style={{ position: "absolute", top: -10, right: -10, width: 60, height: 60, borderRadius: "50%", background: `${color}08` }} />
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+      <Icon d={icon} size={16} color={color} />
+      <span style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1, fontFamily: font }}>{label}</span>
+    </div>
+    <div style={{ fontSize: 28, fontWeight: 700, color: T.text, fontFamily: font, lineHeight: 1 }}>{value}</div>
+    {sub && <div style={{ fontSize: 12, color: T.textMuted, marginTop: 6, fontFamily: font }}>{sub}</div>}
+  </div>
+);
+const Btn = ({ children, onClick, active, small, style: s = {} }) => (
+  <button onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: small ? "5px 10px" : "8px 14px", borderRadius: 8, border: `1px solid ${active ? T.accent : T.border}`, background: active ? T.accentSoft : "transparent", color: active ? T.accent : T.textMuted, fontSize: small ? 12 : 13, fontWeight: 500, cursor: "pointer", fontFamily: font, transition: "all 0.15s", ...s }}>{children}</button>
+);
+const DetailField = ({ label, value, mono, accent }) => (
+  <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${T.border}`, borderRadius: 10, padding: "12px 16px" }}>
+    <div style={{ fontSize: 11, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>{label}</div>
+    <div style={{ fontSize: 14, fontWeight: 500, color: accent ? T.accent : T.text, fontFamily: mono ? fontMono : font, wordBreak: "break-all" }}>{value}</div>
+  </div>
+);
+
+function fmtD(d) { if (!d) return "—"; const p = d.split("-"); return `${p[2]}/${p[1]}/${p[0]}`; }
+const MN = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+const LC = ["#3e6ae1", "#8b5cf6", "#06b6d4", "#ec4899", "#f59e0b", "#22c55e", "#ef4444", "#64748b"];
+
+
+// Data loaded from Supabase
+
+
+
+const db = window.supabaseClient;
+
+async function loadCars() {
+  const { data: cars, error } = await db.from('cars').select('*').order('id');
+  if (error) { console.error('Load cars error:', error); return []; }
+  // Load loans for each car
+  const { data: loans, error: le } = await db.from('loans').select('*').order('start_date');
+  if (le) { console.error('Load loans error:', le); return cars.map(c => ({...mapCar(c), history: []})); }
+  const loansByCarId = {};
+  (loans || []).forEach(l => { if (!loansByCarId[l.car_id]) loansByCarId[l.car_id] = []; loansByCarId[l.car_id].push({ borrower: l.borrower, start: l.start_date, end: l.end_date, kmStart: l.km_start, kmEnd: l.km_end, _id: l.id }); });
+  return cars.map(c => ({ ...mapCar(c), history: loansByCarId[c.id] || [] }));
+}
+
+function mapCar(c) {
+  return {
+    id: c.id, model: c.model, plate: c.plate, vin: c.vin || '', km: c.km || 0,
+    colorExt: c.color_ext || '—', colorInt: c.color_int || '—',
+    location: c.location || '', status: c.status || 'Livre',
+    fuel: c.fuel || 'Elétrico', registrationDate: c.registration_date || '',
+    lastServiceKm: c.last_service_km || 0, maintDismissedAtKm: c.maint_dismissed_at_km,
+    borrower: c.borrower || '', borrowStart: c.borrow_start || '', borrowEnd: c.borrow_end || '',
+    inactiveDate: c.inactive_date || '', inactiveReason: c.inactive_reason || '',
+  };
+}
+
+function mapCarToDB(c) {
+  return {
+    plate: c.plate, model: c.model, vin: c.vin, km: c.km,
+    color_ext: c.colorExt, color_int: c.colorInt,
+    location: c.location, status: c.status, fuel: c.fuel,
+    registration_date: c.registrationDate || null,
+    last_service_km: c.lastServiceKm || 0,
+    maint_dismissed_at_km: c.maintDismissedAtKm || null,
+    borrower: c.borrower || '', borrow_start: c.borrowStart || null,
+    borrow_end: c.borrowEnd || null,
+    inactive_date: c.inactiveDate || null, inactive_reason: c.inactiveReason || '',
+  };
+}
+
+async function saveCar(car) {
+  const dbCar = mapCarToDB(car);
+  if (car.id && car.id > 0) {
+    const { error } = await db.from('cars').update(dbCar).eq('id', car.id);
+    if (error) console.error('Update car error:', error);
+  } else {
+    const { data, error } = await db.from('cars').insert(dbCar).select().single();
+    if (error) console.error('Insert car error:', error);
+    return data ? data.id : null;
+  }
+  return car.id;
+}
+
+async function addLoan(carId, loan) {
+  const { error } = await db.from('loans').insert({
+    car_id: carId, borrower: loan.borrower,
+    start_date: loan.start, end_date: loan.end,
+    km_start: loan.kmStart, km_end: loan.kmEnd,
+  });
+  if (error) console.error('Add loan error:', error);
+}
+
+async function loadLocations() {
+  const { data, error } = await db.from('locations').select('name').order('name');
+  if (error) { console.error('Load locations error:', error); return DEFAULT_LOCATIONS; }
+  return data.map(l => l.name);
+}
+
+async function saveLocation(name) {
+  const { error } = await db.from('locations').insert({ name });
+  if (error && !error.message.includes('duplicate')) console.error('Save location error:', error);
+}
+
+async function removeLocation(name) {
+  const { error } = await db.from('locations').delete().eq('name', name);
+  if (error) console.error('Remove location error:', error);
+}
+
+async function loadAccessTokens() {
+  const { data, error } = await db.from('access_tokens').select('*');
+  if (error) { console.error('Load tokens error:', error); return []; }
+  return data || [];
+}
+ catch {} }
+
+// ═══ LINK-BASED ACCESS ═══
+const ACCESS_TOKENS = { admin: "hpi-admin-2026", editor: "hpi-editor-2026", viewer: "hpi-viewer-2026" };
+
+async function getAccessFromHash() {
+  const hash = window.location.hash.replace("#", "");
+  if (!hash) return { role: "admin", name: "Admin" }; // Default for direct access
+  // Check against Supabase tokens
+  const tokens = await loadAccessTokens();
+  const match = tokens.find(t => t.token === hash);
+  if (match) return { role: match.role, name: match.name };
+  // Fallback to hardcoded
+  if (hash === ACCESS_TOKENS.admin) return { role: "admin", name: "Admin" };
+  if (hash === ACCESS_TOKENS.editor) return { role: "editor", name: "Editor" };
+  if (hash === ACCESS_TOKENS.viewer) return { role: "viewer", name: "Viewer" };
+  return null;
+}
+
+function AccessDenied() {
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: font }}>
+      <div style={{ width: 380, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 20, padding: "40px 36px", textAlign: "center" }}>
+        <div style={{ width: 56, height: 56, borderRadius: 14, background: T.accentSoft, display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+          <span style={{ fontSize: 24, fontWeight: 800, color: T.accent }}>H</span>
+        </div>
+        <h1 style={{ fontSize: 20, fontWeight: 700, color: T.text, margin: "0 0 8px" }}>Parque de Imprensa</h1>
+        <p style={{ fontSize: 13, color: T.textMuted, margin: "0 0 20px" }}>Hyundai Portugal</p>
+        <div style={{ padding: "16px 20px", borderRadius: 10, background: T.dangerSoft, border: `1px solid ${T.dangerBorder}` }}>
+          <p style={{ fontSize: 13, color: T.danger, margin: 0, fontWeight: 500 }}>Acesso negado</p>
+          <p style={{ fontSize: 12, color: T.textMuted, margin: "6px 0 0" }}>Precisa de um link de acesso válido. Contacte o administrador.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ ACCESS LINKS MANAGEMENT (admin only) ═══
+function AccessLinksView({ onBack }) {
+  const [copied, setCopied] = useState(null);
+  const baseUrl = window.location.origin + window.location.pathname;
+
+  const links = [
+    { role: "admin", label: "Admin", desc: "Acesso total: gerir viaturas, importar, definições, utilizadores", color: T.danger, token: ACCESS_TOKENS.admin },
+    { role: "editor", label: "Editor", desc: "Criar e editar marcações em carros ativos", color: T.accent, token: ACCESS_TOKENS.editor },
+    { role: "viewer", label: "Viewer", desc: "Apenas consulta: ver lista, detalhe, timeline, multas, estatísticas", color: T.textMuted, token: ACCESS_TOKENS.viewer },
+  ];
+
+  const copyLink = (token, role) => {
+    const url = `${baseUrl}#${token}`;
+    navigator.clipboard.writeText(url).then(() => { setCopied(role); setTimeout(() => setCopied(null), 2000); }).catch(() => {});
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: font, padding: "24px 28px" }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: T.textMuted, fontSize: 13, cursor: "pointer", fontFamily: font, marginBottom: 24, padding: 0 }}><Icon d={Icons.back} size={16} color={T.textMuted} /> Voltar</button>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 8px" }}>Links de Acesso</h1>
+      <p style={{ fontSize: 13, color: T.textMuted, margin: "0 0 24px" }}>Partilhe o link correspondente ao nível de acesso pretendido. Cada link dá acesso direto sem password.</p>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {links.map(l => (
+          <div key={l.role} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: "20px 24px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <Icon d={Icons.user} size={18} color={l.color} />
+              <span style={{ fontSize: 16, fontWeight: 700, color: l.color }}>{l.label}</span>
+            </div>
+            <p style={{ fontSize: 12, color: T.textMuted, margin: "0 0 14px" }}>{l.desc}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ flex: 1, padding: "8px 12px", background: T.bg, borderRadius: 8, border: `1px solid ${T.border}`, fontFamily: fontMono, fontSize: 12, color: T.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {baseUrl}#{l.token}
+              </div>
+              <button onClick={() => copyLink(l.token, l.role)} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: copied === l.role ? T.free : T.accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font, whiteSpace: "nowrap", transition: "background 0.2s" }}>
+                {copied === l.role ? "✓ Copiado" : "Copiar link"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══ MAIN ═══
+function App() {
+  const [user, setUser] = useState(null);
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    getAccessFromHash().then(access => {
+      setUser(access || { role: "admin", name: "Admin" });
+      setChecked(true);
+    });
+    const handler = () => { getAccessFromHash().then(a => setUser(a || { role: "admin", name: "Admin" })); };
+    window.addEventListener("hashchange", handler);
+    return () => window.removeEventListener("hashchange", handler);
+  }, []);
+
+  if (!checked) return null;
+  if (!user) return <AccessDenied />;
+  return <Dashboard user={user} onLogout={() => { window.location.hash = ""; setUser(null); }} />;
+}
+
+function Dashboard({ user, onLogout }) {
+  const role = user.role; // admin | editor | viewer
+  const canEdit = role === "admin" || role === "editor";
+  const isAdmin = role === "admin";
+
+  const [cars, setCars] = useState([]);
+  const [locations, setLocations] = useState(DEFAULT_LOCATIONS);
+  const [view, setView] = useState("list");
+  const [search, setSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState("Todos");
+  const [filterLoc, setFilterLoc] = useState("Todos");
+  const [showInactive, setShowInactive] = useState(false);
+  const [selectedCar, setSelectedCar] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [editingCar, setEditingCar] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [showUsers, setShowUsers] = useState(false);
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => { Promise.all([loadCars(), loadLocations()]).then(([c, l]) => { setCars(c); setLocations(l); setLoaded(true); }); }, []);
+  // Data is saved per-operation to Supabase
+
+  const activeCars = useMemo(() => showInactive ? cars : cars.filter(c => c.status !== "Inativo"), [cars, showInactive]);
+  const filtered = useMemo(() => activeCars.filter(c => {
+    const q = search.toLowerCase();
+    const ms = !q || c.model.toLowerCase().includes(q) || c.plate.toLowerCase().includes(q) || c.borrower?.toLowerCase().includes(q);
+    return ms && (filterStatus === "Todos" || c.status === filterStatus) && (filterLoc === "Todos" || c.location === filterLoc);
+  }), [activeCars, search, filterStatus, filterLoc]);
+
+  const stats = useMemo(() => {
+    const active = cars.filter(c => c.status !== "Inativo");
+    const total = active.length; const free = active.filter(c => c.status === "Livre").length;
+    const busy = active.filter(c => c.status === "Emprestado").length;
+    const inactive = cars.filter(c => c.status === "Inativo").length;
+    const avgKm = total > 0 ? Math.round(active.reduce((a, c) => a + (c.km || 0), 0) / total) : 0;
+    const byLoc = {}; active.forEach(c => { byLoc[c.location] = (byLoc[c.location] || 0) + 1; });
+    const byModel = {}; active.forEach(c => { byModel[c.model] = (byModel[c.model] || 0) + 1; });
+    const totalLoans = cars.reduce((a, c) => a + (c.history?.length || 0), 0);
+    const maintAlerts = active.filter(c => getMaintenanceStatus(c)).length;
+    // Last month occupancy: average per car
+    const now = new Date();
+    const lmYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    const lmMonth = now.getMonth() === 0 ? 12 : now.getMonth(); // 1-12
+    const lmDays = new Date(lmYear, lmMonth, 0).getDate();
+    const lmStart = new Date(lmYear, lmMonth - 1, 1);
+    const lmEnd = new Date(lmYear, lmMonth - 1, lmDays);
+    const lmLabel = MN[lmMonth - 1] + " " + lmYear;
+    let lmPerCar = [];
+    active.forEach(car => {
+      let carDays = 0;
+      (car.history || []).forEach(h => {
+        const hs = new Date(h.start); const he = new Date(h.end || h.start);
+        const overlapStart = hs > lmStart ? hs : lmStart;
+        const overlapEnd = he < lmEnd ? he : lmEnd;
+        if (overlapStart <= overlapEnd) {
+          carDays += Math.ceil((overlapEnd - overlapStart) / 86400000) + 1;
+        }
+      });
+      lmPerCar.push(Math.min(carDays, lmDays)); // cap at max days in month
+    });
+    const lmAvgDays = total > 0 ? Math.round((lmPerCar.reduce((a, b) => a + b, 0) / total) * 10) / 10 : 0;
+    const lmRate = lmDays > 0 ? Math.round((lmAvgDays / lmDays) * 100) : 0;
+    return { total, free, busy, inactive, avgKm, byLoc, byModel, totalLoans, maintAlerts, lmRate, lmLabel, lmAvgDays, lmDaysInMonth: lmDays };
+  }, [cars]);
+
+  const handleStatClick = (s) => setFilterStatus(p => p === s ? "Todos" : s);
+
+  const dismissMaint = (carId) => {
+    setCars(p => p.map(c => { if (c.id === carId) { const updated = { ...c, maintDismissedAtKm: c.km }; saveCar(updated); return updated; } return c; }));
+  };
+
+  if (!loaded) return <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: font, color: T.textMuted }}>A carregar...</div>;
+  if (selectedCar) { const car = cars.find(c => c.id === selectedCar); if (!car) { setSelectedCar(null); return null; } return <CarDetail car={car} onBack={() => setSelectedCar(null)} canEdit={canEdit} onDismissMaint={() => dismissMaint(car.id)} />; }
+  if (showUsers && isAdmin) return <AccessLinksView onBack={() => setShowUsers(false)} />;
+  if (showSettings && isAdmin) return <SettingsView locations={locations} setLocations={setLocations} onBack={() => setShowSettings(false)} cars={cars} setCars={setCars} />;
+  if (showImport && isAdmin) return <ImportView locations={locations} setLocations={setLocations} cars={cars} setCars={setCars} onBack={() => setShowImport(false)} />;
+  if (showForm && canEdit) return <CarForm car={editingCar} locations={locations} onSave={async d => { if (editingCar) { await saveCar({...editingCar, ...d}); setCars(p => p.map(c => c.id === editingCar.id ? { ...c, ...d } : c)); } else { const newId = await saveCar({id: 0, ...d}); if (newId) setCars(p => [...p, { ...d, id: newId, history: [] }]); } setShowForm(false); setEditingCar(null); }} onCancel={() => { setShowForm(false); setEditingCar(null); }} />;
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: font }}>
+      <style>{`
+        @media (max-width: 768px) {
+          .hpi-header { padding: 14px 16px !important; }
+          .hpi-header-actions { display: none !important; }
+          .hpi-header-actions.open { display: flex !important; flex-direction: column; width: 100%; padding-top: 12px; border-top: 1px solid ${T.border}; margin-top: 12px; }
+          .hpi-mobile-toggle { display: flex !important; }
+          .hpi-stats { padding: 12px 16px !important; }
+          .hpi-stats > div { min-width: calc(50% - 8px) !important; flex: 1 1 calc(50% - 8px) !important; }
+          .hpi-toolbar { padding: 0 16px 12px !important; }
+          .hpi-content { padding: 0 16px 30px !important; }
+          .hpi-list-grid { grid-template-columns: 2fr 1fr auto !important; }
+          .hpi-list-header { grid-template-columns: 2fr 1fr auto !important; }
+          .hpi-list-hide-mobile { display: none !important; }
+          .hpi-logo { width: 110px !important; }
+          .hpi-subtitle-sep { display: none !important; }
+          .hpi-subtitle-text { font-size: 12px !important; }
+          .hpi-subtitle-sub { display: none !important; }
+        }
+      `}</style>
+      <div className="hpi-header" style={{ padding: "16px 28px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <HyundaiLogo width={130} />
+          <div className="hpi-subtitle-sep" style={{ width: 1, height: 28, background: T.border }} />
+          <div>
+            <div className="hpi-subtitle-text" style={{ fontSize: 14, fontWeight: 600, color: T.text }}>Parque de Imprensa</div>
+            <div className="hpi-subtitle-sub" style={{ fontSize: 11, color: T.textMuted }}>Gestão de Frota</div>
+          </div>
+        </div>
+        <button className="hpi-mobile-toggle" onClick={() => setMobileMenu(p => !p)} style={{ display: "none", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: 8, border: `1px solid ${T.border}`, background: "none", cursor: "pointer", color: T.textMuted, fontSize: 18 }}>☰</button>
+        <div className={`hpi-header-actions${mobileMenu ? " open" : ""}`} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.textMuted, padding: "5px 10px", background: "rgba(255,255,255,0.03)", borderRadius: 6, border: `1px solid ${T.border}` }}>
+            <Icon d={Icons.user} size={13} color={role === "admin" ? T.danger : role === "editor" ? T.accent : T.textMuted} />
+            {user.name} <span style={{ fontSize: 10, opacity: 0.6 }}>({ROLES[role]})</span>
+          </span>
+          {isAdmin && <Btn onClick={() => setShowUsers(true)}><Icon d={Icons.users} size={14} color={T.textMuted} /> Links de Acesso</Btn>}
+          {isAdmin && <Btn onClick={() => setShowImport(true)}><Icon d={Icons.upload} size={14} color={T.textMuted} /> Importar</Btn>}
+          {isAdmin && <Btn onClick={() => setShowSettings(true)}><Icon d={Icons.settings} size={14} color={T.textMuted} /> Definições</Btn>}
+          {canEdit && <Btn onClick={() => { setEditingCar(null); setShowForm(true); }} style={{ background: T.accent, color: "#fff", border: "none" }}><Icon d={Icons.plus} size={14} color="#fff" /> Nova Viatura</Btn>}
+          <Btn onClick={onLogout}><Icon d={Icons.logout} size={14} color={T.textMuted} /></Btn>
+        </div>
+      </div>
+
+      <div className="hpi-stats" style={{ padding: "20px 28px", display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <StatCard label="Ativas" value={stats.total} sub={`${stats.free} livres`} icon={Icons.car} onClick={() => { setFilterStatus("Todos"); setShowInactive(false); }} active={filterStatus === "Todos" && !showInactive} />
+        <StatCard label="Livres" value={stats.free} sub={`${stats.total > 0 ? Math.round(stats.free / stats.total * 100) : 0}%`} icon={Icons.check} color={T.free} onClick={() => { handleStatClick("Livre"); setShowInactive(false); }} active={filterStatus === "Livre"} />
+        <StatCard label="Emprestados" value={stats.busy} sub={`${stats.total > 0 ? Math.round(stats.busy / stats.total * 100) : 0}%`} icon={Icons.clock} color={T.busy} onClick={() => { handleStatClick("Emprestado"); setShowInactive(false); }} active={filterStatus === "Emprestado"} />
+        <StatCard label={`Ocupação ${stats.lmLabel}`} value={`${stats.lmRate}%`} sub={`~${stats.lmAvgDays} dias/viatura em ${stats.lmDaysInMonth} dias`} icon={Icons.chart} color="#8b5cf6" />
+        <StatCard label="Inativas" value={stats.inactive} sub="fora do parque" icon={Icons.archive} color={T.inactive} onClick={() => { setShowInactive(true); setFilterStatus("Inativo"); }} active={filterStatus === "Inativo"} />
+      </div>
+
+      <div className="hpi-toolbar" style={{ padding: "0 28px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: "0 12px", flex: 1, minWidth: 200, maxWidth: 360 }}>
+          <Icon d={Icons.search} size={16} color={T.textDim} />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar modelo, matrícula, jornalista..." style={{ background: "none", border: "none", outline: "none", color: T.text, fontSize: 13, fontFamily: font, padding: "9px 0", width: "100%" }} />
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {["Todos", "Livre", "Emprestado", "Inativo"].map(s => <Btn key={s} small active={filterStatus === s} onClick={() => { setFilterStatus(s); if (s === "Inativo") setShowInactive(true); }}>{s}</Btn>)}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {["Todos", ...locations].map(l => <Btn key={l} small active={filterLoc === l} onClick={() => setFilterLoc(l)}>{l}</Btn>)}
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+          {[{ v: "list", d: "M4 6h16M4 12h16M4 18h16" }, { v: "grid", d: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" }, { v: "stats", d: Icons.chart }].map(({ v, d }) => (
+            <Btn key={v} small active={view === v} onClick={() => setView(v)}><Icon d={d} size={14} color={view === v ? T.accent : T.textMuted} /></Btn>
+          ))}
+        </div>
+      </div>
+
+      <div className="hpi-content" style={{ padding: "0 28px 40px" }}>
+        {view === "stats" ? <StatsView stats={stats} cars={cars} /> : view === "grid" ? <GridView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} /> : <ListView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} />}
+      </div>
+    </div>
+  );
+}
+
+// ═══ LIST ═══
+function ListView({ cars, onSelect, onEdit }) {
+  if (cars.length === 0) return <Empty />;
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
+      <div className="hpi-list-header" style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.8fr 0.8fr 0.8fr 0.7fr auto", padding: "12px 20px", borderBottom: `1px solid ${T.border}`, fontSize: 11, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        <span>Viatura</span><span>Estado</span><span className="hpi-list-hide-mobile">Local</span><span className="hpi-list-hide-mobile">Combustível</span><span className="hpi-list-hide-mobile">Km</span><span className="hpi-list-hide-mobile">Cores</span><span></span>
+      </div>
+      {cars.map(car => {
+        const maint = getMaintenanceStatus(car);
+        const isInactive = car.status === "Inativo";
+        return (
+          <div key={car.id} onClick={() => onSelect(car.id)} className="hpi-list-grid" style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.8fr 0.8fr 0.8fr 0.7fr auto", padding: "14px 20px", borderBottom: `1px solid ${T.border}`, cursor: "pointer", alignItems: "center", transition: "background 0.1s", opacity: isInactive ? 0.55 : 1 }}
+            onMouseEnter={e => e.currentTarget.style.background = T.surfaceHover} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 8, background: statusSoft(car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon d={Icons.car} size={17} color={statusColor(car.status)} /></div>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{car.model}</span>
+                  {maint && <MaintBadge alert={maint} />}
+                </div>
+                <span style={{ fontFamily: fontMono, fontSize: 11, color: T.textMuted }}>{car.plate}</span>
+              </div>
+            </div>
+            <div><StatusBadge status={car.status} /></div>
+            <div className="hpi-list-hide-mobile"><LocationBadge loc={car.location} /></div>
+            <div className="hpi-list-hide-mobile" style={{ fontSize: 12, color: T.textMuted }}>{car.fuel || "—"}</div>
+            <div className="hpi-list-hide-mobile" style={{ fontSize: 13, color: T.textMuted, fontFamily: fontMono }}>{(car.km || 0).toLocaleString("pt-PT")}</div>
+            <div className="hpi-list-hide-mobile" style={{ fontSize: 12, color: T.textDim }}>{car.colorExt}/{car.colorInt}</div>
+            {onEdit && <button onClick={e => { e.stopPropagation(); onEdit(car); }} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, padding: 5, cursor: "pointer", display: "flex" }}><Icon d={Icons.edit} size={13} color={T.textMuted} /></button>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ═══ GRID ═══
+function GridView({ cars, onSelect, onEdit }) {
+  if (cars.length === 0) return <Empty />;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+      {cars.map(car => {
+        const maint = getMaintenanceStatus(car);
+        const isInactive = car.status === "Inativo";
+        return (
+          <div key={car.id} onClick={() => onSelect(car.id)} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: 20, cursor: "pointer", transition: "all 0.15s", position: "relative", opacity: isInactive ? 0.55 : 1 }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = T.borderLight; e.currentTarget.style.transform = "translateY(-1px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}>
+            {onEdit && <div style={{ position: "absolute", top: 14, right: 14 }}><button onClick={e => { e.stopPropagation(); onEdit(car); }} style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${T.border}`, borderRadius: 6, padding: 5, cursor: "pointer", display: "flex" }}><Icon d={Icons.edit} size={13} color={T.textMuted} /></button></div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: statusSoft(car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon d={Icons.car} size={22} color={statusColor(car.status)} /></div>
+              <div><div style={{ fontSize: 15, fontWeight: 700 }}>{car.model}</div><span style={{ fontFamily: fontMono, fontSize: 12, color: T.textMuted }}>{car.plate}</span></div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" }}><StatusBadge status={car.status} /><LocationBadge loc={car.location} />{maint && <MaintBadge alert={maint} />}</div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: 12, color: T.textMuted }}>{(car.km || 0).toLocaleString("pt-PT")} km · {car.fuel || "—"}</span><span style={{ fontSize: 11, color: T.textDim }}>{car.colorExt}/{car.colorInt}</span></div>
+            {car.status === "Emprestado" && car.borrower && <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 12, color: T.busy }}><span style={{ fontWeight: 600 }}>{car.borrower}</span><div style={{ color: T.textDim, marginTop: 2 }}>{fmtD(car.borrowStart)} → {fmtD(car.borrowEnd)}</div></div>}
+            {isInactive && car.inactiveReason && <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 12, color: T.inactive }}><span style={{ fontWeight: 600 }}>{car.inactiveReason}</span>{car.inactiveDate && <div style={{ color: T.textDim, marginTop: 2 }}>Desde {fmtD(car.inactiveDate)}</div>}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ═══ CAR DETAIL ═══
+function CarDetail({ car, onBack, canEdit, onDismissMaint }) {
+  const [filterDate, setFilterDate] = useState("");
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+
+  const findLoan = (ds) => { if (!ds) return null; const t = new Date(ds); return (car.history || []).find(h => { const s = new Date(h.start); const e = h.end ? new Date(h.end) : new Date(); return t >= s && t <= e; }); };
+  const filteredHistory = useMemo(() => { let l = [...(car.history || [])]; if (filterFrom) { const f = new Date(filterFrom); l = l.filter(h => (h.end ? new Date(h.end) : new Date()) >= f); } if (filterTo) { const t = new Date(filterTo); l = l.filter(h => new Date(h.start) <= t); } return l; }, [car.history, filterFrom, filterTo]);
+  const matched = findLoan(filterDate);
+  const sorted = [...(car.history || [])].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const tlStart = sorted.length > 0 ? new Date(sorted[0].start) : new Date();
+  const tlEnd = new Date();
+  const totalDays = Math.max(Math.ceil((tlEnd - tlStart) / 86400000), 1);
+  const isInactive = car.status === "Inativo";
+
+  const DI = ({ label, value, onChange }) => (<div style={{ flex: 1, minWidth: 130 }}><label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>{label}</label><input type="date" value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", color: T.text, fontSize: 13, fontFamily: fontMono, outline: "none" }} /></div>);
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: font, padding: "24px 28px" }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: T.textMuted, fontSize: 13, cursor: "pointer", fontFamily: font, marginBottom: 24, padding: 0 }}><Icon d={Icons.back} size={16} color={T.textMuted} /> Voltar à lista</button>
+
+      {/* Inactive banner */}
+      {isInactive && (
+        <div style={{ background: T.inactiveSoft, border: `1px solid ${T.inactiveBorder}`, borderRadius: 12, padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", gap: 12 }}>
+          <Icon d={Icons.archive} size={20} color={T.inactive} />
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: T.inactive }}>Viatura Inativa</div>
+            <div style={{ fontSize: 12, color: T.textMuted }}>{car.inactiveReason || "Esta viatura já não está no parque de imprensa."}{car.inactiveDate && ` — desde ${fmtD(car.inactiveDate)}`}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 28, flexWrap: "wrap" }}>
+        <div style={{ width: 72, height: 72, borderRadius: 16, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, opacity: isInactive ? 0.5 : 1 }}><Icon d={Icons.car} size={32} color={T.accent} /></div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0 }}>{car.model}</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: fontMono, fontSize: 14, color: T.textMuted, background: "rgba(255,255,255,0.04)", padding: "3px 10px", borderRadius: 6 }}>{car.plate}</span>
+            <StatusBadge status={car.status} /><LocationBadge loc={car.location} />
+            {car.fuel && <span style={{ fontSize: 11, color: T.textMuted, background: "rgba(255,255,255,0.04)", padding: "3px 8px", borderRadius: 5, border: `1px solid ${T.border}` }}>{car.fuel}</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* Info grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 24 }}>
+        <DetailField label="VIN" value={car.vin || "—"} mono />
+        <DetailField label="Quilómetros" value={`${(car.km || 0).toLocaleString("pt-PT")} km`} />
+        <DetailField label="Combustível" value={car.fuel || "—"} />
+        <DetailField label="Data Matrícula" value={fmtD(car.registrationDate)} />
+        <DetailField label="Cor Exterior" value={car.colorExt || "—"} />
+        <DetailField label="Cor Interior" value={car.colorInt || "—"} />
+        {car.status === "Emprestado" && <><DetailField label="Emprestado a" value={car.borrower} accent /><DetailField label="Período" value={`${fmtD(car.borrowStart)} → ${fmtD(car.borrowEnd)}`} /></>}
+      </div>
+
+      {/* Maintenance alert with dismiss */}
+      {(() => { const m = getMaintenanceStatus(car); return m ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", marginBottom: 24, borderRadius: 10, background: m.type === "danger" ? T.dangerSoft : T.warnSoft, border: `1px solid ${m.type === "danger" ? T.dangerBorder : T.warnBorder}` }}>
+          <Icon d={Icons.wrench} size={16} color={m.type === "danger" ? T.danger : T.busy} />
+          <span style={{ flex: 1, fontSize: 13, color: m.type === "danger" ? T.danger : T.busy, fontWeight: 500 }}>{m.msg}</span>
+          {canEdit && <button onClick={onDismissMaint} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 6, border: `1px solid ${T.border}`, background: "rgba(255,255,255,0.04)", color: T.free, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font }}>
+            <Icon d={Icons.check} size={13} color={T.free} />Concluída
+          </button>}
+        </div>
+      ) : null; })()}
+
+      {/* Fine lookup */}
+      <div style={{ background: "linear-gradient(135deg, rgba(239,68,68,0.06), rgba(239,68,68,0.02))", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 14, padding: "20px 22px", marginBottom: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+          <Icon d={Icons.alert} size={18} color={T.danger} />
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.danger }}>Consulta de Multas</span>
+          <span style={{ fontSize: 12, color: T.textMuted }}>— Quem tinha o carro nesta data?</span>
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Data da infração</label>
+            <input type="date" value={filterDate} onChange={e => setFilterDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: fontMono, outline: "none" }} />
+          </div>
+          {filterDate && <button onClick={() => setFilterDate("")} style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 14px", color: T.textMuted, fontSize: 12, cursor: "pointer", fontFamily: font }}>Limpar</button>}
+        </div>
+        {filterDate && (
+          <div style={{ marginTop: 14, padding: "14px 18px", borderRadius: 10, background: matched ? "rgba(62,106,225,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${matched ? "rgba(62,106,225,0.25)" : T.border}` }}>
+            {matched ? (<div><div style={{ fontSize: 11, fontWeight: 600, color: T.accent, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>Viatura emprestada a:</div><div style={{ fontSize: 18, fontWeight: 700 }}>{matched.borrower}</div><div style={{ fontSize: 13, color: T.textMuted, marginTop: 4 }}>Período: {fmtD(matched.start)} → {matched.end ? fmtD(matched.end) : "Em curso"}</div><div style={{ fontSize: 12, color: T.textMuted, marginTop: 2, fontFamily: fontMono }}>Km: {matched.kmStart?.toLocaleString("pt-PT")} → {matched.kmEnd ? matched.kmEnd.toLocaleString("pt-PT") : "—"}</div></div>)
+            : (<div><div style={{ fontSize: 14, fontWeight: 600, color: T.free }}>Nenhum empréstimo nesta data</div><div style={{ fontSize: 12, color: T.textMuted, marginTop: 4 }}>A viatura estava no parque em {fmtD(filterDate)}.</div></div>)}
+          </div>
+        )}
+      </div>
+
+      {/* Timeline */}
+      {sorted.length > 0 && (
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: "22px 24px", marginBottom: 24 }}>
+          <h2 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 18px", display: "flex", alignItems: "center", gap: 8 }}><Icon d={Icons.clock} size={16} color={T.accent} /> Timeline de Utilização</h2>
+          <div style={{ position: "relative", marginBottom: 8 }}>
+            <div style={{ height: 32, background: "rgba(255,255,255,0.03)", borderRadius: 8, border: `1px solid ${T.border}`, position: "relative", overflow: "hidden" }}>
+              {sorted.map((h, i) => { const s = new Date(h.start); const e = h.end ? new Date(h.end) : new Date(); const so = Math.max(0, (s - tlStart) / 86400000); const dur = Math.ceil((e - s) / 86400000) + 1; const lp = (so / totalDays) * 100; const wp = Math.max((dur / totalDays) * 100, 1); const c = LC[i % LC.length]; const hl = filterDate && matched === h; return <div key={i} title={`${h.borrower}\n${fmtD(h.start)} → ${h.end ? fmtD(h.end) : "Em curso"}`} style={{ position: "absolute", top: 3, bottom: 3, left: `${lp}%`, width: `${wp}%`, background: c, borderRadius: 5, opacity: hl ? 1 : 0.7, boxShadow: hl ? `0 0 0 2px ${T.bg}, 0 0 0 4px ${c}` : "none", transition: "all 0.2s" }} />; })}
+              {filterDate && (() => { const t = new Date(filterDate); if (t >= tlStart && t <= tlEnd) { const p = ((t - tlStart) / 86400000 / totalDays) * 100; return <div style={{ position: "absolute", top: -4, bottom: -4, left: `${p}%`, width: 2, background: T.danger, borderRadius: 1, zIndex: 2 }}><div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", width: 8, height: 8, borderRadius: "50%", background: T.danger, boxShadow: `0 0 6px ${T.danger}` }} /></div>; } return null; })()}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}><span style={{ fontSize: 10, color: T.textDim, fontFamily: fontMono }}>{fmtD(tlStart.toISOString().split("T")[0])}</span><span style={{ fontSize: 10, color: T.textDim, fontFamily: fontMono }}>Hoje</span></div>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 14 }}>
+            {sorted.map((h, i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 3, background: LC[i % LC.length] }} /><span style={{ fontSize: 11, color: T.textMuted }}>{h.borrower.split("—")[0].trim()}</span></div>)}
+          </div>
+        </div>
+      )}
+
+      {/* History list */}
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: "22px 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
+          <h2 style={{ fontSize: 14, fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: 8 }}><Icon d={Icons.filter} size={15} color={T.accent} /> Histórico {(filterFrom || filterTo) && <span style={{ fontSize: 11, fontWeight: 500, color: T.accent }}>(filtrado)</span>}</h2>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}><DI label="De" value={filterFrom} onChange={setFilterFrom} /><DI label="Até" value={filterTo} onChange={setFilterTo} />{(filterFrom || filterTo) && <button onClick={() => { setFilterFrom(""); setFilterTo(""); }} style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 12px", color: T.textMuted, fontSize: 11, cursor: "pointer", fontFamily: font }}>Limpar</button>}</div>
+        </div>
+        {filteredHistory.length === 0 ? <div style={{ color: T.textDim, fontSize: 13, padding: "20px 0", textAlign: "center" }}>Nenhum empréstimo encontrado.</div> : (
+          <div>{filteredHistory.slice().reverse().map((h, i) => { const ci = (car.history || []).indexOf(h); const c = LC[ci % LC.length]; return (
+            <div key={i} style={{ display: "flex", gap: 16, padding: "16px 0", borderBottom: i < filteredHistory.length - 1 ? `1px solid ${T.border}` : "none" }}>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 20, flexShrink: 0 }}><div style={{ width: 12, height: 12, borderRadius: "50%", background: c, flexShrink: 0 }} />{i < filteredHistory.length - 1 && <div style={{ width: 2, flex: 1, background: T.border, marginTop: 4 }} />}</div>
+              <div style={{ flex: 1 }}><div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}><div><div style={{ fontSize: 14, fontWeight: 600 }}>{h.borrower}</div><div style={{ fontSize: 12, color: T.textMuted, marginTop: 3 }}>{fmtD(h.start)} → {h.end ? fmtD(h.end) : <span style={{ color: T.busy }}>Em curso</span>} <span style={{ color: T.textDim }}>({Math.ceil(((h.end ? new Date(h.end) : new Date()) - new Date(h.start)) / 86400000) + 1} dias)</span></div></div><div style={{ textAlign: "right" }}><div style={{ fontSize: 12, color: T.textMuted, fontFamily: fontMono }}>{h.kmStart?.toLocaleString("pt-PT")} → {h.kmEnd ? h.kmEnd.toLocaleString("pt-PT") : "—"} km</div>{h.kmEnd && <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, fontFamily: fontMono, marginTop: 2 }}>+{(h.kmEnd - h.kmStart).toLocaleString("pt-PT")} km</div>}</div></div></div>
+            </div>
+          ); })}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══ STATS ═══
+function calcOcc(cars) {
+  const md = {}, yd = {};
+  cars.filter(c => c.status !== "Inativo").forEach(car => (car.history || []).forEach(h => { const s = new Date(h.start); const e = h.end ? new Date(h.end) : new Date(); const c2 = new Date(s); while (c2 <= e) { const ym = `${c2.getFullYear()}-${String(c2.getMonth() + 1).padStart(2, "0")}`; md[ym] = (md[ym] || 0) + 1; yd[`${c2.getFullYear()}`] = (yd[`${c2.getFullYear()}`] || 0) + 1; c2.setDate(c2.getDate() + 1); } }));
+  const am = new Set(), ay = new Set();
+  cars.filter(c => c.status !== "Inativo").forEach(car => (car.history || []).forEach(h => { const s = new Date(h.start); const e = h.end ? new Date(h.end) : new Date(); const c2 = new Date(s.getFullYear(), s.getMonth(), 1); while (c2 <= e) { am.add(`${c2.getFullYear()}-${String(c2.getMonth() + 1).padStart(2, "0")}`); ay.add(`${c2.getFullYear()}`); c2.setMonth(c2.getMonth() + 1); } }));
+  const nc = cars.filter(c => c.status !== "Inativo").length || 1;
+  const monthly = [...am].sort().map(ym => { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m, 0).getDate(); const tp = nc * d; const o = md[ym] || 0; return { key: ym, label: `${MN[m - 1]} ${y}`, rate: Math.round(o / tp * 100), occupied: o }; });
+  const yearly = [...ay].sort().map(y => { const yn = Number(y); const now = new Date(); let ed = ((yn % 4 === 0 && yn % 100 !== 0) || yn % 400 === 0) ? 366 : 365; if (yn === now.getFullYear()) ed = Math.ceil((now - new Date(yn, 0, 1)) / 86400000) + 1; const tp = nc * ed; const o = yd[y] || 0; return { key: y, label: y, rate: Math.round(o / tp * 100), occupied: o }; });
+  return { monthly, yearly };
+}
+function StatsView({ stats, cars }) {
+  const [tab, setTab] = useState("monthly");
+  const active = cars.filter(c => c.status !== "Inativo");
+  const me = Object.entries(stats.byModel).sort((a, b) => b[1] - a[1]);
+  const le = Object.entries(stats.byLoc).sort((a, b) => b[1] - a[1]);
+  const mm = Math.max(...me.map(e => e[1]), 1);
+  const topKm = [...active].sort((a, b) => (b.km || 0) - (a.km || 0)).slice(0, 5);
+  const occ = useMemo(() => calcOcc(cars), [cars]);
+  const od = tab === "monthly" ? occ.monthly : occ.yearly;
+  const mr = Math.max(...od.map(d => d.rate), 1);
+  const bc = (r) => r >= 30 ? "#22c55e" : r >= 15 ? T.accent : r >= 5 ? T.busy : T.textDim;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
+          <div><h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Taxa de Ocupação</h3><p style={{ fontSize: 12, color: T.textMuted, margin: "4px 0 0" }}>% de dias com viaturas emprestadas (exclui inativas)</p></div>
+          <div style={{ display: "flex", gap: 4 }}><Btn small active={tab === "monthly"} onClick={() => setTab("monthly")}>Mensal</Btn><Btn small active={tab === "yearly"} onClick={() => setTab("yearly")}>Anual</Btn></div>
+        </div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: tab === "yearly" ? 20 : 6, height: 200, overflowX: "auto" }}>
+          {od.map(d => (<div key={d.key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: tab === "yearly" ? "0 0 80px" : 1, minWidth: tab === "monthly" ? 36 : 60 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: bc(d.rate) }}>{d.rate}%</span>
+            <div style={{ width: "100%", maxWidth: tab === "yearly" ? 60 : 40, height: `${Math.max((d.rate / Math.max(mr, 50)) * 150, 4)}px`, background: `linear-gradient(180deg, ${bc(d.rate)}, ${bc(d.rate)}66)`, borderRadius: "4px 4px 0 0" }} />
+            <span style={{ fontSize: tab === "monthly" ? 10 : 12, color: T.textMuted, writingMode: tab === "monthly" ? "vertical-rl" : "horizontal-tb", transform: tab === "monthly" ? "rotate(180deg)" : "none", height: tab === "monthly" ? 50 : "auto" }}>{d.label}</span>
+          </div>))}
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 18px" }}>Viaturas por Modelo</h3>
+          {me.map(([m, c]) => <div key={m} style={{ marginBottom: 10 }}><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}><span style={{ fontSize: 13 }}>{m}</span><span style={{ fontSize: 13, fontWeight: 600, color: T.accent }}>{c}</span></div><div style={{ height: 6, background: "rgba(255,255,255,0.04)", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${(c / mm) * 100}%`, background: T.accent, borderRadius: 3 }} /></div></div>)}
+        </div>
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 18px" }}>Top 5 — Mais Km</h3>
+          {topKm.map((c, i) => <div key={c.id} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><div style={{ display: "flex", alignItems: "center", gap: 10 }}><span style={{ fontSize: 12, fontWeight: 700, color: T.textDim, width: 18 }}>{i + 1}</span><span style={{ fontSize: 13 }}>{c.model}</span></div><span style={{ fontSize: 13, fontWeight: 600, color: "#8b5cf6", fontFamily: fontMono }}>{(c.km || 0).toLocaleString("pt-PT")} km</span></div>)}
+        </div>
+      </div>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 12px" }}>Resumo</h3>
+        <div style={{ fontSize: 13, color: T.textMuted, lineHeight: 1.8 }}>Parque com <strong style={{ color: T.text }}>{stats.total} viaturas ativas</strong> (<strong style={{ color: T.free }}>{stats.free} livres</strong>, <strong style={{ color: T.busy }}>{stats.busy} emprestadas</strong>) e <strong style={{ color: T.inactive }}>{stats.inactive} inativas</strong>. Total de <strong style={{ color: T.text }}>{stats.totalLoans} empréstimos</strong>. Km médio: <strong style={{ color: T.text }}>{stats.avgKm.toLocaleString("pt-PT")} km</strong>.{stats.maintAlerts > 0 && <> <strong style={{ color: T.danger }}>{stats.maintAlerts} viatura(s)</strong> com alertas de manutenção.</>}</div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ CAR FORM ═══
+function CarForm({ car, locations, onSave, onCancel }) {
+  const [f, sF] = useState({
+    model: car?.model || "", plate: car?.plate || "", vin: car?.vin || "", km: car?.km || 0,
+    colorExt: car?.colorExt || "Branco", colorInt: car?.colorInt || "Preto",
+    location: car?.location || locations[0] || "", status: car?.status || "Livre",
+    fuel: car?.fuel || "Elétrico", registrationDate: car?.registrationDate || "", lastServiceKm: car?.lastServiceKm || 0,
+    borrower: car?.borrower || "", borrowStart: car?.borrowStart || "", borrowEnd: car?.borrowEnd || "",
+    inactiveDate: car?.inactiveDate || "", inactiveReason: car?.inactiveReason || "",
+  });
+  const s = (k, v) => sF(p => ({ ...p, [k]: v }));
+  const Inp = ({ label, value, onChange, mono, type = "text", half, hint }) => (<div style={{ flex: half ? "1 1 45%" : "1 1 100%", minWidth: half ? 140 : 280 }}><label style={{ display: "block", fontSize: 11, fontWeight: 600, color: T.textMuted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.6 }}>{label}</label>{hint && <div style={{ fontSize: 10, color: T.textDim, marginBottom: 4 }}>{hint}</div>}<input type={type} value={value} onChange={e => onChange(type === "number" ? Number(e.target.value) : e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: "10px 12px", color: T.text, fontSize: 13, fontFamily: mono ? fontMono : font, outline: "none" }} /></div>);
+  const Sel = ({ label, value, onChange, options, half }) => (<div style={{ flex: half ? "1 1 45%" : "1 1 100%", minWidth: half ? 140 : 280 }}><label style={{ display: "block", fontSize: 11, fontWeight: 600, color: T.textMuted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.6 }}>{label}</label><select value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: "10px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }}>{options.map(o => <option key={o} value={o}>{o}</option>)}</select></div>);
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: font, padding: "24px 28px" }}>
+      <button onClick={onCancel} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: T.textMuted, fontSize: 13, cursor: "pointer", fontFamily: font, marginBottom: 24, padding: 0 }}><Icon d={Icons.back} size={16} color={T.textMuted} /> Cancelar</button>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 24px" }}>{car ? "Editar Viatura" : "Nova Viatura"}</h1>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24, display: "flex", flexWrap: "wrap", gap: 16 }}>
+        <Inp label="Modelo" value={f.model} onChange={v => s("model", v)} half />
+        <Inp label="Matrícula" value={f.plate} onChange={v => s("plate", v)} half mono />
+        <Inp label="VIN" value={f.vin} onChange={v => s("vin", v)} mono />
+        <Inp label="Quilómetros" value={f.km} onChange={v => s("km", v)} type="number" half />
+        <Sel label="Combustível" value={f.fuel} onChange={v => s("fuel", v)} options={FUEL_TYPES} half />
+        <Inp label="Data de Matrícula" value={f.registrationDate} onChange={v => s("registrationDate", v)} type="date" half />
+        {f.fuel === "Gasolina" && <Inp label="Km da Última Revisão" value={f.lastServiceKm} onChange={v => s("lastServiceKm", v)} type="number" half hint="Para calcular a próxima manutenção (cada 10.000 km)" />}
+        <Sel label="Localização" value={f.location} onChange={v => s("location", v)} options={[...locations, ""]} half />
+        <Sel label="Cor Exterior" value={f.colorExt} onChange={v => s("colorExt", v)} options={COLORS_EXT} half />
+        <Sel label="Cor Interior" value={f.colorInt} onChange={v => s("colorInt", v)} options={COLORS_INT} half />
+        <Sel label="Estado" value={f.status} onChange={v => s("status", v)} options={STATUSES} half />
+        {f.status === "Emprestado" && <><Inp label="Emprestado a" value={f.borrower} onChange={v => s("borrower", v)} /><Inp label="Data Início" value={f.borrowStart} onChange={v => s("borrowStart", v)} type="date" half /><Inp label="Data Fim" value={f.borrowEnd} onChange={v => s("borrowEnd", v)} type="date" half /></>}
+        {f.status === "Inativo" && <><Inp label="Data de Saída" value={f.inactiveDate} onChange={v => s("inactiveDate", v)} type="date" half /><Inp label="Motivo" value={f.inactiveReason} onChange={v => s("inactiveReason", v)} half hint="Ex: Devolvido ao importador, Acidente, Fim de contrato..." /></>}
+      </div>
+      <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+        <Btn onClick={onCancel}>Cancelar</Btn>
+        <button onClick={() => onSave(f)} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: T.accent, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: font }}>{car ? "Guardar" : "Adicionar"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══ SETTINGS ═══
+function SettingsView({ locations, setLocations, onBack, cars, setCars }) {
+  const [nl, sNl] = useState("");
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: font, padding: "24px 28px" }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: T.textMuted, fontSize: 13, cursor: "pointer", fontFamily: font, marginBottom: 24, padding: 0 }}><Icon d={Icons.back} size={16} color={T.textMuted} /> Voltar</button>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 28px" }}>Definições</h1>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24, marginBottom: 20 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 16px" }}>Localizações</h2>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
+          {locations.map(l => (<div key={l} style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 12px" }}><Icon d={Icons.pin} size={14} color={T.accent} /><span style={{ fontSize: 13, fontWeight: 600 }}>{l}</span><button onClick={() => { if (cars.some(c => c.location === l && c.status !== "Inativo")) alert(`"${l}" tem viaturas ativas.`); else removeLocation(l); setLocations(p => p.filter(x => x !== l)); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 2, display: "flex" }}><Icon d={Icons.x} size={14} color={T.textDim} /></button></div>))}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={nl} onChange={e => sNl(e.target.value)} placeholder="Ex: CAT, Algarve..." onKeyDown={e => { if (e.key === "Enter") { const t = nl.trim(); if (t && !locations.includes(t)) { saveLocation(t); setLocations(p => [...p, t]); sNl(""); } } }} style={{ flex: 1, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }} />
+          <Btn onClick={() => { const t = nl.trim(); if (t && !locations.includes(t)) { saveLocation(t); setLocations(p => [...p, t]); sNl(""); } }} style={{ background: T.accent, color: "#fff", border: "none" }}><Icon d={Icons.plus} size={14} color="#fff" /> Adicionar</Btn>
+        </div>
+      </div>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 16px" }}>Dados</h2>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <span style={{ fontSize: 13, color: T.textMuted }}>{cars.length} viaturas ({cars.filter(c => c.status === "Inativo").length} inativas) · {locations.length} localizações</span>
+          <span style={{ flex: 1 }} />
+          <button onClick={async () => { if (confirm("Repor dados originais? Isto recarrega os dados do ficheiro original.")) { try { await window.storage.delete("hyundai-fleet-v5"); window.location.reload(); } catch {} } }} style={{ background: T.dangerSoft, border: `1px solid ${T.dangerBorder}`, borderRadius: 8, padding: "8px 14px", color: T.danger, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font }}>Repor dados originais</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ IMPORT ═══
+function ImportView({ locations, setLocations, cars, setCars, onBack }) {
+  const [csv, setCsv] = useState("");
+  const [step, setStep] = useState(1); // 1=input, 2=preview, 3=done
+  const [parsed, setParsed] = useState(null); // { cars: [...], totalLoans, months }
+  const [mode, setMode] = useState("merge");
+  const [error, setError] = useState("");
+  const fRef = useRef(null);
+
+  // Portuguese month names to number
+  const MONTH_MAP = { janeiro: 0, fevereiro: 1, "março": 2, marco: 2, abril: 3, maio: 4, junho: 5, julho: 6, agosto: 7, setembro: 8, outubro: 9, novembro: 10, dezembro: 11, jan: 0, fev: 1, mar: 2, abr: 3, mai: 4, jun: 5, jul: 6, ago: 7, set: 8, out: 9, nov: 10, dez: 11, january: 0, february: 1, march: 2, april: 3, may: 4, june: 5, july: 6, august: 7, september: 8, october: 9, november: 10, december: 11 };
+
+  const parseSheet = () => {
+    setError("");
+    try {
+      const lines = csv.split("\n");
+      if (lines.length < 4) { setError("O ficheiro precisa de pelo menos 4 linhas (2 de cabeçalho + 1 de campos + dados)."); return; }
+
+      // Detect separator
+      const sep = lines[0].includes("\t") ? "\t" : lines[0].includes(";") ? ";" : ",";
+      const splitLine = (line) => {
+        const v = []; let cur = ""; let inQ = false;
+        for (const ch of line) { if (ch === '"') inQ = !inQ; else if (ch === sep && !inQ) { v.push(cur); cur = ""; } else cur += ch; }
+        v.push(cur); return v.map(x => x.trim().replace(/^["']|["']$/g, "").trim());
+      };
+
+      // Parse all lines
+      const allRows = lines.map(l => splitLine(l));
+
+      // Find the header row (row with "Matrícula" or "matrículas" or "MATRÍCULA" in first cols)
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(allRows.length, 6); i++) {
+        const row = allRows[i];
+        const joined = row.slice(0, 8).join(" ").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        if (joined.includes("matricula") || joined.includes("modelo") || joined.includes("km")) {
+          headerRowIdx = i; break;
+        }
+      }
+      if (headerRowIdx === -1) { setError("Não encontrei a linha de cabeçalhos (Matrícula, KM, Modelo...)."); return; }
+
+      const headers = allRows[headerRowIdx].map(h => h.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+
+      // Identify fixed columns
+      const findCol = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
+      const colPlate = findCol(["matricula"]);
+      const colKm = findCol(["km"]);
+      const colModel = findCol(["modelo"]);
+      const colColor = findCol(["cor", "ext"]);
+      const colVin = findCol(["vin"]);
+      const colLoc = findCol(["pi", "localiza", "parque", "local"]);
+
+      if (colPlate === -1 && colModel === -1) { setError("Não encontrei as colunas de Matrícula ou Modelo."); return; }
+
+      // Find where the calendar starts - scan rows above headerRowIdx for month names
+      // The month header row typically has merged cells with "agosto 2020" etc.
+      let calendarStartCol = -1;
+      let monthDateMap = {}; // colIndex -> Date
+
+      // Scan the rows above the header for month names
+      for (let scanRow = 0; scanRow < headerRowIdx; scanRow++) {
+        const row = allRows[scanRow];
+        for (let c = 8; c < row.length; c++) {
+          const cell = (row[c] || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          if (!cell) continue;
+          // Match "month year" pattern
+          const parts = cell.split(/\s+/);
+          if (parts.length >= 2) {
+            const monthName = parts[0];
+            const year = parseInt(parts[parts.length - 1]);
+            if (MONTH_MAP[monthName] !== undefined && year >= 2018 && year <= 2030) {
+              if (calendarStartCol === -1 || c < calendarStartCol) calendarStartCol = c;
+              // This column starts this month
+              monthDateMap[c] = { month: MONTH_MAP[monthName], year };
+            }
+          }
+        }
+      }
+
+      // Also check the header row itself for day numbers or day-of-week patterns
+      const headerRow = allRows[headerRowIdx];
+
+      // Build the date for each column
+      // The day numbers should be in the header row (or the row below the month row)
+      // We need to find day numbers - they might be in the header row or a row between month headers and data
+      let dayRow = allRows[headerRowIdx]; // Try header row first
+      // Check if there's a row with just numbers (days) between month headers and data
+      for (let r = 0; r <= headerRowIdx; r++) {
+        const row = allRows[r];
+        let numCount = 0;
+        for (let c = calendarStartCol; c < Math.min(row.length, calendarStartCol + 40); c++) {
+          const val = (row[c] || "").trim();
+          if (/^[0-9]{1,2}$/.test(val) && parseInt(val) >= 1 && parseInt(val) <= 31) numCount++;
+        }
+        if (numCount >= 5) { dayRow = row; break; }
+      }
+
+      // Build column -> date mapping
+      const colDateMap = {}; // colIndex -> "YYYY-MM-DD"
+      if (calendarStartCol >= 0) {
+        // Get sorted month start columns
+        const monthStarts = Object.entries(monthDateMap).map(([c, d]) => ({ col: parseInt(c), ...d })).sort((a, b) => a.col - b.col);
+
+        for (let c = calendarStartCol; c < Math.max(headerRow.length, dayRow.length); c++) {
+          const dayVal = (dayRow[c] || "").trim();
+          // Find which month this column belongs to
+          let monthInfo = null;
+          for (let m = monthStarts.length - 1; m >= 0; m--) {
+            if (c >= monthStarts[m].col) { monthInfo = monthStarts[m]; break; }
+          }
+          if (!monthInfo) continue;
+
+          let day = 0;
+          // Try to parse day from the day row
+          if (/^[0-9]{1,2}$/.test(dayVal)) {
+            day = parseInt(dayVal);
+          } else {
+            // Calculate day from position relative to month start
+            // Each month has day columns - figure out offset
+            const offset = c - monthInfo.col;
+            // The columns often have day-of-week labels (3ª, 4ª, 5ª, 6ª, S, D) interspersed
+            // Look at the actual day row content nearby to figure out the day
+            // For now, try to extract from the header row
+            const altVal = (headerRow[c] || "").trim();
+            if (/^[0-9]{1,2}$/.test(altVal)) day = parseInt(altVal);
+          }
+
+          if (day >= 1 && day <= 31) {
+            const dateStr = `${monthInfo.year}-${String(monthInfo.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+            // Validate the date
+            const testDate = new Date(dateStr);
+            if (!isNaN(testDate.getTime())) {
+              colDateMap[c] = dateStr;
+            }
+          }
+        }
+      }
+
+      const totalCalendarCols = Object.keys(colDateMap).length;
+
+      // Parse car rows (everything after the header row)
+      const dataRows = allRows.slice(headerRowIdx + 1);
+      const importedCars = [];
+      let totalLoans = 0;
+
+      for (const row of dataRows) {
+        const plate = (row[colPlate] || "").trim().toUpperCase();
+        const model = colModel >= 0 ? (row[colModel] || "").trim() : "";
+        if (!plate && !model) continue; // Skip empty rows
+        if (!model) continue; // Need at least a model
+
+        const km = colKm >= 0 ? parseInt((row[colKm] || "").replace(/[^\d]/g, "")) || 0 : 0;
+        const colorRaw = colColor >= 0 ? (row[colColor] || "").trim() : "";
+        const vin = colVin >= 0 ? (row[colVin] || "").trim() : "";
+        const loc = colLoc >= 0 ? (row[colLoc] || "").trim() : "";
+
+        // Parse calendar for this car
+        const history = [];
+        let currentBorrower = null;
+        let currentStart = null;
+        let lastDate = null;
+
+        // Sort columns by date
+        const sortedCols = Object.entries(colDateMap).sort((a, b) => a[1].localeCompare(b[1]));
+
+        for (const [colStr, dateStr] of sortedCols) {
+          const c = parseInt(colStr);
+          const cellValue = (row[c] || "").trim();
+
+          if (cellValue && cellValue.length > 0) {
+            // This day has a borrower
+            if (currentBorrower === null) {
+              // Start new loan
+              currentBorrower = cellValue;
+              currentStart = dateStr;
+            } else if (cellValue !== currentBorrower) {
+              // Different borrower - close previous, start new
+              history.push({ borrower: currentBorrower, start: currentStart, end: lastDate || currentStart, kmStart: null, kmEnd: null });
+              totalLoans++;
+              currentBorrower = cellValue;
+              currentStart = dateStr;
+            }
+            lastDate = dateStr;
+          } else {
+            // Empty cell - close current loan if any
+            if (currentBorrower !== null) {
+              history.push({ borrower: currentBorrower, start: currentStart, end: lastDate || currentStart, kmStart: null, kmEnd: null });
+              totalLoans++;
+              currentBorrower = null;
+              currentStart = null;
+              lastDate = null;
+            }
+          }
+        }
+        // Close last open loan
+        if (currentBorrower !== null) {
+          history.push({ borrower: currentBorrower, start: currentStart, end: lastDate || currentStart, kmStart: null, kmEnd: null });
+          totalLoans++;
+        }
+
+        // Determine status: if plate matches an active car, it stays active; otherwise Inativo
+        const activePlates = new Set(cars.filter(c => c.status !== "Inativo").map(c => c.plate.toUpperCase()));
+        const isActiveCar = plate && activePlates.has(plate);
+        const lastLoan = history.length > 0 ? history[history.length - 1] : null;
+        const today = new Date().toISOString().split("T")[0];
+        const isCurrentlyBorrowed = lastLoan && lastLoan.end >= today;
+        const status = isActiveCar ? (isCurrentlyBorrowed ? "Emprestado" : "Livre") : "Inativo";
+
+        // Add location
+        if (loc && !locations.includes(loc)) {
+          setLocations(p => p.includes(loc) ? p : [...p, loc]);
+        }
+
+        importedCars.push({
+          id: Date.now() + importedCars.length,
+          model, plate: plate || "SEM-MATRICULA", vin, km,
+          colorExt: colorRaw || "—", colorInt: "—",
+          location: loc || (isActiveCar ? "" : ""),
+          status,
+          fuel: model.toLowerCase().includes("ev ") || model.toLowerCase().includes("elétric") || model.toLowerCase().includes("electric") || model.toLowerCase().includes(" ev") || model.toLowerCase().includes("66kwh") || model.toLowerCase().includes("49kwh") || model.toLowerCase().includes("84kwh") ? "Elétrico" :
+                model.toLowerCase().includes("hev") || model.toLowerCase().includes("phev") || model.toLowerCase().includes("híbrid") ? (model.toLowerCase().includes("phev") ? "Híbrido Plug-in" : "Híbrido") :
+                model.toLowerCase().includes("t-gdi") || model.toLowerCase().includes("tgdi") || model.toLowerCase().includes("gdi") ? "Gasolina" :
+                model.toLowerCase().includes("crdi") || model.toLowerCase().includes("diesel") ? "Diesel" : "Elétrico",
+          registrationDate: "",
+          lastServiceKm: 0,
+          borrower: (isActiveCar && isCurrentlyBorrowed) ? lastLoan.borrower : "",
+          borrowStart: (isActiveCar && isCurrentlyBorrowed) ? lastLoan.start : "",
+          borrowEnd: (isActiveCar && isCurrentlyBorrowed) ? lastLoan.end : "",
+          inactiveDate: !isActiveCar && history.length > 0 ? history[history.length - 1].end : "",
+          inactiveReason: !isActiveCar ? "Saiu do parque de imprensa" : "",
+          history,
+        });
+      }
+
+      // Get unique months found
+      const monthsList = [...new Set(Object.values(colDateMap).map(d => d.substring(0, 7)))].sort();
+
+      setParsed({ cars: importedCars, totalLoans, months: monthsList, totalCalendarCols });
+      setStep(2);
+    } catch (e) {
+      setError(`Erro ao processar: ${e.message}`);
+    }
+  };
+
+  const doImport = () => {
+    if (!parsed) return;
+    if (mode === "replace") {
+      setCars(parsed.cars);
+    } else {
+      setCars(prev => {
+        const existing = new Map(prev.map(c => [c.plate.toUpperCase(), c]));
+        parsed.cars.forEach(nc => {
+          const k = nc.plate.toUpperCase();
+          if (existing.has(k)) {
+            const old = existing.get(k);
+            // Merge histories, keeping existing car's base data and status
+            const mergedHistory = [...(old.history || [])];
+            (nc.history || []).forEach(newLoan => {
+              const isDuplicate = mergedHistory.some(h => h.start === newLoan.start && h.borrower === newLoan.borrower);
+              if (!isDuplicate) mergedHistory.push(newLoan);
+            });
+            mergedHistory.sort((a, b) => a.start.localeCompare(b.start));
+            // Keep the active car's status, location, km etc — only add history
+            existing.set(k, { ...old, history: mergedHistory });
+          } else {
+            // New car from import — add as-is (will be Inativo if not in active list)
+            existing.set(k, nc);
+          }
+        });
+        return [...existing.values()];
+      });
+    }
+    setStep(3);
+  };
+
+  // ── Step 3: Done ──
+  if (step === 3) return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: font, padding: "24px 28px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+      <div style={{ width: 64, height: 64, borderRadius: "50%", background: T.freeSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon d={Icons.check} size={32} color={T.free} /></div>
+      <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Importação concluída!</h2>
+      <p style={{ fontSize: 13, color: T.textMuted, textAlign: "center" }}>{parsed?.cars.length} viaturas importadas com {parsed?.totalLoans} empréstimos no histórico.</p>
+      <Btn onClick={onBack} style={{ background: T.accent, color: "#fff", border: "none", marginTop: 8 }}>Voltar à lista</Btn>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: font, padding: "24px 28px" }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: T.textMuted, fontSize: 13, cursor: "pointer", fontFamily: font, marginBottom: 24, padding: 0 }}><Icon d={Icons.back} size={16} color={T.textMuted} /> Voltar</button>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 8px" }}>Importar do Google Sheets</h1>
+      <p style={{ fontSize: 13, color: T.textMuted, margin: "0 0 24px", lineHeight: 1.6 }}>
+        Este importador lê a estrutura do vosso sheet com o calendário de ocupação. Exporte como CSV (Ficheiro → Transferir → CSV) ou copie e cole todo o conteúdo.
+      </p>
+
+      {/* Step 1: Input */}
+      {step === 1 && (
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 6px" }}>1. Colar ou carregar o ficheiro</h2>
+          <p style={{ fontSize: 12, color: T.textMuted, margin: "0 0 16px" }}>O importador reconhece automaticamente: colunas fixas (Matrícula, KM, Modelo, Cor, VIN, Localização) e o calendário com os meses e dias à direita.</p>
+
+          <div style={{ marginBottom: 14 }}>
+            <input type="file" accept=".csv,.tsv,.txt" ref={fRef} onChange={e => { const f = e.target.files[0]; if (f) { const r = new FileReader(); r.onload = ev => setCsv(ev.target.result); r.readAsText(f); } }} style={{ display: "none" }} />
+            <Btn onClick={() => fRef.current?.click()}><Icon d={Icons.upload} size={14} color={T.textMuted} /> Carregar ficheiro CSV</Btn>
+            {csv && <span style={{ fontSize: 12, color: T.free, marginLeft: 12 }}>✓ {csv.split("\n").length} linhas carregadas</span>}
+          </div>
+
+          <textarea value={csv} onChange={e => setCsv(e.target.value)} placeholder={"Cole aqui todo o conteúdo do Google Sheet (Ctrl+A, Ctrl+C no sheet, depois Ctrl+V aqui)...\n\nOu exporte como CSV: Ficheiro → Transferir → Valores separados por vírgulas (.csv)"} rows={8} style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: 12, color: T.text, fontSize: 12, fontFamily: fontMono, outline: "none", resize: "vertical" }} />
+
+          {error && <div style={{ marginTop: 12, padding: "12px 16px", borderRadius: 8, background: T.dangerSoft, border: `1px solid ${T.dangerBorder}`, fontSize: 13, color: T.danger }}>{error}</div>}
+
+          <div style={{ marginTop: 16 }}>
+            <button onClick={parseSheet} disabled={!csv.trim()} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: csv.trim() ? T.accent : T.textDim, color: "#fff", fontSize: 14, fontWeight: 600, cursor: csv.trim() ? "pointer" : "not-allowed", fontFamily: font }}>Analisar dados</button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 2: Preview */}
+      {step === 2 && parsed && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* Summary */}
+          <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+            <h2 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 16px" }}>2. Pré-visualização</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 }}>
+              <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 10, padding: "14px 16px", border: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 24, fontWeight: 700, color: T.accent }}>{parsed.cars.length}</div>
+                <div style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 4 }}>Viaturas</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 10, padding: "14px 16px", border: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 24, fontWeight: 700, color: T.busy }}>{parsed.totalLoans}</div>
+                <div style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 4 }}>Empréstimos</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 10, padding: "14px 16px", border: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 24, fontWeight: 700, color: T.free }}>{parsed.totalCalendarCols}</div>
+                <div style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 4 }}>Dias mapeados</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 10, padding: "14px 16px", border: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 24, fontWeight: 700, color: T.text }}>{parsed.months.length}</div>
+                <div style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 4 }}>Meses</div>
+              </div>
+            </div>
+
+            {parsed.months.length > 0 && (
+              <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 16 }}>
+                Período: <strong style={{ color: T.text }}>{parsed.months[0]}</strong> → <strong style={{ color: T.text }}>{parsed.months[parsed.months.length - 1]}</strong>
+              </div>
+            )}
+
+            {/* Car list preview */}
+            <div style={{ maxHeight: 350, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10 }}>
+              {parsed.cars.map((car, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: `1px solid ${T.border}` }}>
+                  <div style={{ width: 30, height: 30, borderRadius: 8, background: statusSoft(car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Icon d={Icons.car} size={15} color={statusColor(car.status)} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{car.model}</div>
+                    <div style={{ fontSize: 11, color: T.textMuted, fontFamily: fontMono }}>{car.plate}</div>
+                  </div>
+                  <div style={{ fontSize: 11, color: T.textMuted, textAlign: "right" }}>{car.location}</div>
+                  <div style={{ fontSize: 11, color: T.textMuted, fontFamily: fontMono, textAlign: "right", minWidth: 50 }}>{car.km > 0 ? car.km.toLocaleString("pt-PT") : "—"}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, minWidth: 80, textAlign: "right" }}>{car.history.length} emprést.</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Import options */}
+          <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 20 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: T.textMuted }}>Modo de importação:</span>
+              <Btn small active={mode === "replace"} onClick={() => setMode("replace")}>Substituir tudo</Btn>
+              <Btn small active={mode === "merge"} onClick={() => setMode("merge")}>Juntar (por matrícula)</Btn>
+            </div>
+            <div style={{ display: "flex", gap: 12 }}>
+              <Btn onClick={() => { setStep(1); setParsed(null); }}>← Voltar</Btn>
+              <button onClick={doImport} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: T.accent, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: font }}>
+                Importar {parsed.cars.length} viaturas com {parsed.totalLoans} empréstimos
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Empty() { return <div style={{ textAlign: "center", padding: "60px 20px", color: T.textDim }}><Icon d={Icons.car} size={40} color={T.textDim} style={{ margin: "0 auto 16px", display: "block" }} /><div style={{ fontSize: 14 }}>Nenhuma viatura encontrada.</div></div>; }
+
+
+ReactDOM.render(React.createElement(App), document.getElementById('root'));
+
+  </script>
 </body>
 </html>
