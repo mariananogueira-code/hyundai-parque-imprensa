@@ -28,19 +28,12 @@
     </div>
   </div>
 
-  <script>
-    window.onerror = function(msg, src, line, col, err) {
-      document.getElementById('root').innerHTML = '<div class="error-screen"><div style="font-size:18px;font-weight:700;">Erro ao carregar</div><div style="color:#7a8299;font-size:13px;">' + msg + '</div><div style="color:#4a5168;font-size:11px;">Linha: ' + line + '</div></div>';
-    };
-  </script>
-
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.26.10/babel.min.js"></script>
 
   <script>
-    // Initialize Supabase after library loads
     window.supabaseClient = window.supabase.createClient(
       'https://furzhavvpfskozxdsuvwq.supabase.co',
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1cnpoYXZ2cGZza296eGRzdXZ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4NjQ1NTYsImV4cCI6MjA4OTQ0MDU1Nn0.hDqbR7PFQtrtk5CQRSYi6x2jO7HHJoO8T5eOINTsZzU'
@@ -269,7 +262,7 @@ async function loadAccessTokens() {
   if (error) { console.error('Load tokens error:', error); return []; }
   return data || [];
 }
- catch {} }
+ catch(e) {} }
 
 // ═══ LINK-BASED ACCESS ═══
 const ACCESS_TOKENS = { admin: "hpi-admin-2026", editor: "hpi-editor-2026", viewer: "hpi-viewer-2026" };
@@ -835,7 +828,7 @@ function SettingsView({ locations, setLocations, onBack, cars, setCars }) {
         <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <span style={{ fontSize: 13, color: T.textMuted }}>{cars.length} viaturas ({cars.filter(c => c.status === "Inativo").length} inativas) · {locations.length} localizações</span>
           <span style={{ flex: 1 }} />
-          <button onClick={async () => { if (confirm("Repor dados originais? Isto recarrega os dados do ficheiro original.")) { try { await window.storage.delete("hyundai-fleet-v5"); window.location.reload(); } catch {} } }} style={{ background: T.dangerSoft, border: `1px solid ${T.dangerBorder}`, borderRadius: 8, padding: "8px 14px", color: T.danger, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font }}>Repor dados originais</button>
+          <button onClick={async () => { if (confirm("Repor dados originais? Isto recarrega os dados do ficheiro original.")) { try { window.location.reload(); } catch(e) {} } }} style={{ background: T.dangerSoft, border: `1px solid ${T.dangerBorder}`, borderRadius: 8, padding: "8px 14px", color: T.danger, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font }}>Repor dados originais</button>
         </div>
       </div>
     </div>
