@@ -262,6 +262,51 @@ async function removeLocation(name) {
   if (error) console.error('Remove location error:', error);
 }
 
+// Contacts
+async function loadContacts() {
+  let all = []; let from = 0;
+  while (true) {
+    const { data, error } = await db.from('contacts').select('*').order('name').range(from, from + 999);
+    if (error) { console.error('Load contacts error:', error); break; }
+    if (!data || data.length === 0) break;
+    all = all.concat(data); if (data.length < 1000) break; from += 1000;
+  }
+  return all;
+}
+async function saveContact(c) {
+  if (c.id) {
+    const { error } = await db.from('contacts').update({ name: c.name, company: c.company, phone: c.phone, email: c.email, license_number: c.license_number, notes: c.notes }).eq('id', c.id);
+    if (error) console.error('Update contact error:', error);
+    return c.id;
+  } else {
+    const { data, error } = await db.from('contacts').insert({ name: c.name, company: c.company || '', phone: c.phone || '', email: c.email || '', license_number: c.license_number || '', notes: c.notes || '' }).select().single();
+    if (error) console.error('Insert contact error:', error);
+    return data ? data.id : null;
+  }
+}
+async function deleteContact(id) {
+  const { error } = await db.from('contacts').delete().eq('id', id);
+  if (error) console.error('Delete contact error:', error);
+}
+
+// Damages
+async function loadDamages() {
+  const { data, error } = await db.from('damages').select('*').order('damage_date', { ascending: false });
+  if (error) { console.error('Load damages error:', error); return []; }
+  return data || [];
+}
+async function saveDamage(d) {
+  if (d.id) {
+    const { error } = await db.from('damages').update({ description: d.description, damage_date: d.damage_date, reported_by: d.reported_by, cost_estimate: d.cost_estimate, status: d.status, resolved_date: d.resolved_date, notes: d.notes }).eq('id', d.id);
+    if (error) console.error('Update damage error:', error);
+    return d.id;
+  } else {
+    const { data, error } = await db.from('damages').insert({ car_id: d.car_id, description: d.description, damage_date: d.damage_date, reported_by: d.reported_by || '', cost_estimate: d.cost_estimate || 0, status: d.status || 'Aberto', notes: d.notes || '' }).select().single();
+    if (error) console.error('Insert damage error:', error);
+    return data ? data.id : null;
+  }
+}
+
 async function loadAccessTokens() {
   const { data, error } = await db.from('access_tokens').select('*');
   if (error) { console.error('Load tokens error:', error); return []; }
@@ -375,7 +420,9 @@ function Dashboard({ user, onLogout }) {
 
   const [cars, setCars] = useState([]);
   const [locations, setLocations] = useState(DEFAULT_LOCATIONS);
-  const [view, setView] = useState("list");
+  const [contacts, setContacts] = useState([]);
+  const [damages, setDamages] = useState([]);
+  const [view, setView] = useState("calendar");
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("Todos");
   const [filterLoc, setFilterLoc] = useState("Todos");
@@ -386,16 +433,17 @@ function Dashboard({ user, onLogout }) {
   const [showSettings, setShowSettings] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
+  const [showContacts, setShowContacts] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => { Promise.all([loadCars(), loadLocations()]).then(([c, l]) => { setCars(c); setLocations(l); setLoaded(true); }); }, []);
+  useEffect(() => { Promise.all([loadCars(), loadLocations(), loadContacts(), loadDamages()]).then(([c, l, ct, dm]) => { setCars(c); setLocations(l); setContacts(ct); setDamages(dm); setLoaded(true); }); }, []);
   // Data is saved per-operation to Supabase
 
   const activeCars = useMemo(() => showInactive ? cars : cars.filter(c => c.status !== "Inativo"), [cars, showInactive]);
   const filtered = useMemo(() => activeCars.filter(c => {
     const q = search.toLowerCase();
-    const ms = !q || c.model.toLowerCase().includes(q) || c.plate.toLowerCase().includes(q) || c.borrower?.toLowerCase().includes(q);
+    const ms = !q || c.model.toLowerCase().includes(q) || c.plate.toLowerCase().includes(q) || c.borrower?.toLowerCase().includes(q) || (c.history || []).some(h => h.borrower?.toLowerCase().includes(q));
     return ms && (filterStatus === "Todos" || c.status === filterStatus) && (filterLoc === "Todos" || c.location === filterLoc);
   }), [activeCars, search, filterStatus, filterLoc]);
 
@@ -442,8 +490,9 @@ function Dashboard({ user, onLogout }) {
   };
 
   if (!loaded) return <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: font, color: T.textMuted }}>A carregar...</div>;
-  if (selectedCar) { const car = cars.find(c => c.id === selectedCar); if (!car) { setSelectedCar(null); return null; } return <CarDetail car={car} onBack={() => setSelectedCar(null)} canEdit={canEdit} isAdmin={isAdmin} onDismissMaint={() => dismissMaint(car.id)} onEdit={() => { setEditingCar(car); setShowForm(true); setSelectedCar(null); }} onUpdateKm={async (newKm) => { const updated = { ...car, km: newKm }; await saveCar(updated); setCars(p => p.map(c => c.id === car.id ? { ...c, km: newKm } : c)); }} onBorrow={async (borrower, start, end) => { const loan = { borrower, start, end: end || start, kmStart: null, kmEnd: null }; await addLoan(car.id, loan); const today = new Date().toISOString().split("T")[0]; if (start <= today && (end || start) >= today) { const updated = { ...car, status: "Emprestado", borrower, borrowStart: start, borrowEnd: end || start }; await saveCar(updated); setCars(p => p.map(c => c.id === car.id ? { ...c, ...updated, history: [...(c.history || []), loan] } : c)); } else { setCars(p => p.map(c => c.id === car.id ? { ...c, history: [...(c.history || []), loan] } : c)); } }} onReturn={async () => { const updated = { ...car, status: "Livre", borrower: "", borrowStart: "", borrowEnd: "" }; await saveCar(updated); setCars(p => p.map(c => c.id === car.id ? { ...c, status: "Livre", borrower: "", borrowStart: "", borrowEnd: "" } : c)); }} />; }
+  if (selectedCar) { const car = cars.find(c => c.id === selectedCar); if (!car) { setSelectedCar(null); return null; } const carDamages = damages.filter(d => d.car_id === car.id); return <CarDetail car={car} onBack={() => setSelectedCar(null)} canEdit={canEdit} isAdmin={isAdmin} contacts={contacts} setContacts={setContacts} damages={carDamages} setDamages={setDamages} onDismissMaint={() => dismissMaint(car.id)} onEdit={() => { setEditingCar(car); setShowForm(true); setSelectedCar(null); }} onUpdateKm={async (newKm) => { const updated = { ...car, km: newKm }; await saveCar(updated); setCars(p => p.map(c => c.id === car.id ? { ...c, km: newKm } : c)); }} onBorrow={async (borrower, start, end) => { const loan = { borrower, start, end: end || start, kmStart: null, kmEnd: null }; await addLoan(car.id, loan); const today = new Date().toISOString().split("T")[0]; if (start <= today && (end || start) >= today) { const updated = { ...car, status: "Emprestado", borrower, borrowStart: start, borrowEnd: end || start }; await saveCar(updated); setCars(p => p.map(c => c.id === car.id ? { ...c, ...updated, history: [...(c.history || []), loan] } : c)); } else { setCars(p => p.map(c => c.id === car.id ? { ...c, history: [...(c.history || []), loan] } : c)); } }} />; }
   if (showUsers && isAdmin) return <AccessLinksView onBack={() => setShowUsers(false)} />;
+  if (showContacts && canEdit) return <ContactsView contacts={contacts} setContacts={setContacts} onBack={() => setShowContacts(false)} />;
   if (showSettings && isAdmin) return <SettingsView locations={locations} setLocations={setLocations} onBack={() => setShowSettings(false)} cars={cars} setCars={setCars} />;
   if (showImport && isAdmin) return <ImportView locations={locations} setLocations={setLocations} cars={cars} setCars={setCars} onBack={() => setShowImport(false)} />;
   if (showForm && canEdit) return <CarForm car={editingCar} locations={locations} onSave={async d => { if (editingCar) { await saveCar({...editingCar, ...d}); setCars(p => p.map(c => c.id === editingCar.id ? { ...c, ...d } : c)); } else { const newId = await saveCar({id: 0, ...d}); if (newId) setCars(p => [...p, { ...d, id: newId, history: [] }]); } setShowForm(false); setEditingCar(null); }} onCancel={() => { setShowForm(false); setEditingCar(null); }} />;
@@ -485,6 +534,7 @@ function Dashboard({ user, onLogout }) {
             {user.name} <span style={{ fontSize: 10, opacity: 0.6 }}>({ROLES[role]})</span>
           </span>
           {isAdmin && <Btn onClick={() => setShowUsers(true)}><Icon d={Icons.users} size={14} color={T.textMuted} /> Links de Acesso</Btn>}
+          {canEdit && <Btn onClick={() => setShowContacts(true)}><Icon d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" size={14} color={T.textMuted} /> Contactos</Btn>}
           {isAdmin && <Btn onClick={() => setShowImport(true)}><Icon d={Icons.upload} size={14} color={T.textMuted} /> Importar</Btn>}
           {isAdmin && <Btn onClick={() => setShowSettings(true)}><Icon d={Icons.settings} size={14} color={T.textMuted} /> Definições</Btn>}
           {canEdit && <Btn onClick={() => { setEditingCar(null); setShowForm(true); }} style={{ background: T.accent, color: "#fff", border: "none" }}><Icon d={Icons.plus} size={14} color="#fff" /> Nova Viatura</Btn>}
@@ -526,7 +576,7 @@ function Dashboard({ user, onLogout }) {
 
       <div className="hpi-content" style={{ padding: "0 28px 40px" }}>
         {view === "stats" ? <StatsView stats={stats} cars={cars} /> :
-         view === "calendar" ? <CalendarView cars={cars.filter(c => c.status !== "Inativo")} onSelect={setSelectedCar} /> :
+         view === "calendar" ? <CalendarView cars={cars.filter(c => c.status !== "Inativo")} damages={damages} onSelect={setSelectedCar} /> :
          view === "availability" ? <AvailabilityView cars={cars.filter(c => c.status !== "Inativo")} onSelect={setSelectedCar} /> :
          view === "grid" ? <GridView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} /> :
          <ListView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} />}
@@ -601,22 +651,56 @@ function GridView({ cars, onSelect, onEdit }) {
 }
 
 // ═══ BORROW / RETURN ACTION ═══
-function BorrowAction({ car, onBorrow }) {
+function BorrowAction({ car, onBorrow, contacts, setContacts }) {
   const [showForm, setShowForm] = useState(false);
   const [borrower, setBorrower] = useState("");
   const [startDate, setStartDate] = useState(new Date().toISOString().split("T")[0]);
   const [endDate, setEndDate] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const suggestions = useMemo(() => {
+    if (!borrower || borrower.length < 2 || !contacts) return [];
+    const q = borrower.toLowerCase();
+    return contacts.filter(c => c.name.toLowerCase().includes(q) || (c.company || '').toLowerCase().includes(q)).slice(0, 5);
+  }, [borrower, contacts]);
+
+  const selectContact = (c) => {
+    setBorrower(c.company ? `${c.name} - ${c.company}` : c.name);
+    setShowSuggestions(false);
+  };
+
+  const addNewContact = async () => {
+    const name = borrower.includes(' - ') ? borrower.split(' - ')[0].trim() : borrower;
+    const company = borrower.includes(' - ') ? borrower.split(' - ')[1].trim() : '';
+    const id = await saveContact({ name, company });
+    if (id && setContacts) { setContacts(p => [...p, { id, name, company, phone: '', email: '', license_number: '', notes: '' }]); }
+  };
 
   return (
     <div style={{ marginBottom: 24 }}>
-      {/* Nova Marcação - always visible */}
       {showForm ? (
         <div style={{ padding: "18px 20px", borderRadius: 12, background: T.surface, border: `1px solid ${T.accent}` }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: T.accent, marginBottom: 14 }}>Nova Marcação</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <div style={{ flex: 2, minWidth: 180 }}>
+            <div style={{ flex: 2, minWidth: 180, position: "relative" }}>
               <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Emprestado a</label>
-              <input value={borrower} onChange={e => setBorrower(e.target.value)} placeholder="Nome — Órgão" style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }} />
+              <input value={borrower} onChange={e => { setBorrower(e.target.value); setShowSuggestions(true); }} onFocus={() => setShowSuggestions(true)} placeholder="Nome — Órgão" style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }} />
+              {showSuggestions && borrower.length >= 2 && (
+                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: T.surface, border: `1px solid ${T.border}`, borderTop: "none", borderRadius: "0 0 8px 8px", zIndex: 10, maxHeight: 200, overflowY: "auto" }}>
+                  {suggestions.map(c => (
+                    <div key={c.id} onClick={() => selectContact(c)} style={{ padding: "10px 12px", borderBottom: `1px solid ${T.border}`, cursor: "pointer", fontSize: 13 }}
+                      onMouseEnter={e => e.currentTarget.style.background = T.surfaceHover} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                      <div style={{ fontWeight: 600, color: T.text }}>{c.name}</div>
+                      <div style={{ fontSize: 11, color: T.textDim }}>{[c.company, c.email].filter(Boolean).join(' · ')}</div>
+                    </div>
+                  ))}
+                  {suggestions.length === 0 && (
+                    <div onClick={() => { addNewContact(); setShowSuggestions(false); }} style={{ padding: "10px 12px", cursor: "pointer", fontSize: 12, color: T.accent, fontWeight: 600 }}>
+                      + Adicionar "{borrower}" como novo contacto
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div style={{ flex: 1, minWidth: 130 }}>
               <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Data Início</label>
@@ -642,7 +726,7 @@ function BorrowAction({ car, onBorrow }) {
 }
 
 // ═══ CAR DETAIL ═══
-function CarDetail({ car, onBack, canEdit, isAdmin, onDismissMaint, onEdit, onUpdateKm, onBorrow }) {
+function CarDetail({ car, onBack, canEdit, isAdmin, onDismissMaint, onEdit, onUpdateKm, onBorrow, contacts, setContacts, damages, setDamages }) {
   const [filterDate, setFilterDate] = useState("");
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
@@ -717,7 +801,7 @@ function CarDetail({ car, onBack, canEdit, isAdmin, onDismissMaint, onEdit, onUp
 
       {/* Borrow / Return actions */}
       {canEdit && car.status !== "Inativo" && (
-        <BorrowAction car={car} onBorrow={onBorrow} />
+        <BorrowAction car={car} onBorrow={onBorrow} contacts={contacts} setContacts={setContacts} />
       )}
 
       {/* Maintenance alert with dismiss */}
@@ -770,6 +854,9 @@ function CarDetail({ car, onBack, canEdit, isAdmin, onDismissMaint, onEdit, onUp
         </div>
       )}
 
+      {/* Damages */}
+      <DamagesSection carId={car.id} damages={damages} setDamages={setDamages} canEdit={canEdit} />
+
       {/* History list */}
       <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: "22px 24px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
@@ -784,6 +871,202 @@ function CarDetail({ car, onBack, canEdit, isAdmin, onDismissMaint, onEdit, onUp
             </div>
           ); })}</div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ═══ DAMAGES SECTION (inside CarDetail) ═══
+function DamagesSection({ carId, damages, setDamages, canEdit }) {
+  const [showForm, setShowForm] = useState(false);
+  const [desc, setDesc] = useState("");
+  const [dDate, setDDate] = useState(new Date().toISOString().split("T")[0]);
+  const [reportedBy, setReportedBy] = useState("");
+  const [cost, setCost] = useState(0);
+  const [notes, setNotes] = useState("");
+
+  const handleAdd = async () => {
+    if (!desc) return;
+    const id = await saveDamage({ car_id: carId, description: desc, damage_date: dDate, reported_by: reportedBy, cost_estimate: cost, status: "Aberto", notes });
+    if (id) setDamages(p => [{ id, car_id: carId, description: desc, damage_date: dDate, reported_by: reportedBy, cost_estimate: cost, status: "Aberto", resolved_date: null, notes }, ...p]);
+    setShowForm(false); setDesc(""); setReportedBy(""); setCost(0); setNotes("");
+  };
+
+  const toggleResolved = async (d) => {
+    const newStatus = d.status === "Aberto" ? "Resolvido" : "Aberto";
+    const resolved = newStatus === "Resolvido" ? new Date().toISOString().split("T")[0] : null;
+    await saveDamage({ ...d, status: newStatus, resolved_date: resolved });
+    setDamages(p => p.map(x => x.id === d.id ? { ...x, status: newStatus, resolved_date: resolved } : x));
+  };
+
+  const openCount = damages.filter(d => d.status === "Aberto").length;
+
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${openCount > 0 ? T.dangerBorder : T.border}`, borderRadius: 14, padding: "22px 24px", marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: damages.length > 0 || showForm ? 16 : 0 }}>
+        <Icon d={Icons.alert} size={16} color={openCount > 0 ? T.danger : T.textMuted} />
+        <span style={{ fontSize: 14, fontWeight: 700, flex: 1 }}>Histórico de Danos</span>
+        {openCount > 0 && <span style={{ fontSize: 11, fontWeight: 600, color: T.danger, padding: "2px 8px", borderRadius: 4, background: T.dangerSoft }}>{openCount} aberto{openCount > 1 ? "s" : ""}</span>}
+        {damages.length > 0 && !openCount && <span style={{ fontSize: 11, color: T.textMuted }}>{damages.length} registo{damages.length > 1 ? "s" : ""}</span>}
+        {canEdit && !showForm && <button onClick={() => setShowForm(true)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 6, border: `1px dashed ${T.danger}`, background: T.dangerSoft, color: T.danger, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: font }}><Icon d={Icons.plus} size={12} color={T.danger} />Registar dano</button>}
+      </div>
+
+      {showForm && (
+        <div style={{ border: `1px solid ${T.danger}`, borderRadius: 10, padding: 16, marginBottom: 16, background: "rgba(239,68,68,0.03)" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.danger, marginBottom: 12 }}>Registar novo dano</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ flex: 2, minWidth: 180 }}>
+              <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Descrição</label>
+              <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Ex: Risco no para-choques..." style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 120 }}>
+              <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Data</label>
+              <input type="date" value={dDate} onChange={e => setDDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: fontMono, outline: "none" }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 120 }}>
+              <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Reportado por</label>
+              <input value={reportedBy} onChange={e => setReportedBy(e.target.value)} placeholder="Nome" style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 100 }}>
+              <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Custo est. (EUR)</label>
+              <input type="number" value={cost} onChange={e => setCost(Number(e.target.value))} style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: fontMono, outline: "none" }} />
+            </div>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Notas</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Detalhes adicionais..." style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={handleAdd} disabled={!desc} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: desc ? T.danger : T.textDim, color: "#fff", fontSize: 12, fontWeight: 600, cursor: desc ? "pointer" : "not-allowed", fontFamily: font }}>Registar</button>
+            <button onClick={() => setShowForm(false)} style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${T.border}`, background: "none", color: T.textMuted, fontSize: 12, cursor: "pointer", fontFamily: font }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {damages.map(d => (
+        <div key={d.id} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 0", borderTop: `1px solid ${T.border}` }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: d.status === "Aberto" ? T.danger : T.free, marginTop: 6, flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{d.description}</span>
+              <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: d.status === "Aberto" ? T.dangerSoft : "rgba(34,197,94,0.1)", color: d.status === "Aberto" ? T.danger : T.free }}>{d.status}</span>
+            </div>
+            {d.notes && <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 4 }}>{d.notes}</div>}
+            <div style={{ display: "flex", gap: 14, fontSize: 11, color: T.textDim, flexWrap: "wrap" }}>
+              <span>Data: <span style={{ color: T.textMuted }}>{fmtD(d.damage_date)}</span></span>
+              {d.reported_by && <span>Reportado: <span style={{ color: T.textMuted }}>{d.reported_by}</span></span>}
+              {d.cost_estimate > 0 && <span>Custo: <span style={{ color: d.status === "Aberto" ? T.busy : T.free }}>{Number(d.cost_estimate).toLocaleString("pt-PT")} EUR</span></span>}
+              {d.resolved_date && <span>Resolvido: <span style={{ color: T.textMuted }}>{fmtD(d.resolved_date)}</span></span>}
+            </div>
+          </div>
+          {canEdit && <button onClick={() => toggleResolved(d)} style={{ padding: "4px 10px", borderRadius: 6, border: `1px solid ${T.border}`, background: "rgba(255,255,255,0.04)", color: d.status === "Aberto" ? T.free : T.busy, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: font, whiteSpace: "nowrap" }}>{d.status === "Aberto" ? "Marcar resolvido" : "Reabrir"}</button>}
+        </div>
+      ))}
+      {damages.length === 0 && !showForm && <div style={{ fontSize: 12, color: T.textDim, marginTop: 8 }}>Sem danos registados.</div>}
+    </div>
+  );
+}
+
+// ═══ CONTACTS VIEW ═══
+function ContactsView({ contacts, setContacts, onBack }) {
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [f, sF] = useState({ name: "", company: "", phone: "", email: "", license_number: "", notes: "" });
+
+  const filtered = useMemo(() => {
+    if (!search) return contacts;
+    const q = search.toLowerCase();
+    return contacts.filter(c => c.name.toLowerCase().includes(q) || (c.company || "").toLowerCase().includes(q) || (c.email || "").toLowerCase().includes(q));
+  }, [contacts, search]);
+
+  const handleSave = async () => {
+    if (!f.name) return;
+    if (editing) {
+      await saveContact({ ...f, id: editing.id });
+      setContacts(p => p.map(c => c.id === editing.id ? { ...c, ...f } : c));
+    } else {
+      const id = await saveContact(f);
+      if (id) setContacts(p => [...p, { ...f, id }]);
+    }
+    setShowForm(false); setEditing(null); sF({ name: "", company: "", phone: "", email: "", license_number: "", notes: "" });
+  };
+
+  const handleEdit = (c) => {
+    setEditing(c);
+    sF({ name: c.name, company: c.company || "", phone: c.phone || "", email: c.email || "", license_number: c.license_number || "", notes: c.notes || "" });
+    setShowForm(true);
+  };
+
+  const handleDelete = async (c) => {
+    if (!confirm(`Apagar contacto "${c.name}"?`)) return;
+    await deleteContact(c.id);
+    setContacts(p => p.filter(x => x.id !== c.id));
+  };
+
+  const colors = [T.accent, "#8b5cf6", "#06b6d4", "#ec4899", "#f59e0b", "#22c55e", "#ef4444"];
+  const getInitials = (n) => n.split(" ").map(w => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+
+  const Inp = ({ label, value, onChange, placeholder, half, mono }) => (
+    <div style={{ flex: half ? "1 1 45%" : "1 1 100%", minWidth: half ? 140 : 280 }}>
+      <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>{label}</label>
+      <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder || ""} style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: mono ? fontMono : font, outline: "none" }} />
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: font, padding: "24px 28px" }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: T.textMuted, fontSize: 13, cursor: "pointer", fontFamily: font, marginBottom: 24, padding: 0 }}><Icon d={Icons.back} size={16} color={T.textMuted} /> Voltar</button>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Contactos</h1>
+          <p style={{ fontSize: 13, color: T.textMuted, margin: 0 }}>{contacts.length} registos — jornalistas, parceiros e meios de comunicação</p>
+        </div>
+        <Btn onClick={() => { setEditing(null); sF({ name: "", company: "", phone: "", email: "", license_number: "", notes: "" }); setShowForm(true); }} style={{ background: T.accent, color: "#fff", border: "none" }}><Icon d={Icons.plus} size={14} color="#fff" /> Novo contacto</Btn>
+      </div>
+
+      {showForm && (
+        <div style={{ background: T.surface, border: `1px solid ${T.accent}`, borderRadius: 14, padding: 24, marginBottom: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.accent, marginBottom: 16 }}>{editing ? "Editar contacto" : "Novo contacto"}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+            <Inp label="Nome" value={f.name} onChange={v => sF(p => ({ ...p, name: v }))} placeholder="Nome completo" half />
+            <Inp label="Empresa / Órgão" value={f.company} onChange={v => sF(p => ({ ...p, company: v }))} placeholder="Ex: RTP, Turbo, AutoFoco" half />
+            <Inp label="Telefone" value={f.phone} onChange={v => sF(p => ({ ...p, phone: v }))} placeholder="912 345 678" half mono />
+            <Inp label="Email" value={f.email} onChange={v => sF(p => ({ ...p, email: v }))} placeholder="email@exemplo.pt" half />
+            <Inp label="Nº Carta de Condução" value={f.license_number} onChange={v => sF(p => ({ ...p, license_number: v }))} placeholder="Nº da carta" half mono />
+            <Inp label="Notas" value={f.notes} onChange={v => sF(p => ({ ...p, notes: v }))} placeholder="Observações..." />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button onClick={handleSave} disabled={!f.name} style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: f.name ? T.accent : T.textDim, color: "#fff", fontSize: 13, fontWeight: 600, cursor: f.name ? "pointer" : "not-allowed", fontFamily: font }}>{editing ? "Guardar" : "Adicionar"}</button>
+            <button onClick={() => { setShowForm(false); setEditing(null); }} style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${T.border}`, background: "none", color: T.textMuted, fontSize: 13, cursor: "pointer", fontFamily: font }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: "0 12px", marginBottom: 16, maxWidth: 400 }}>
+        <Icon d={Icons.search} size={16} color={T.textDim} />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar contacto..." style={{ background: "none", border: "none", outline: "none", color: T.text, fontSize: 13, fontFamily: font, padding: "9px 0", width: "100%" }} />
+      </div>
+
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
+        {filtered.map((c, i) => {
+          const clr = colors[i % colors.length];
+          return (
+            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ width: 36, height: 36, borderRadius: "50%", background: clr + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: clr, flexShrink: 0 }}>{getInitials(c.name)}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{c.name}</div>
+                {c.company && <div style={{ fontSize: 11, color: T.textDim }}>{c.company}</div>}
+              </div>
+              <div style={{ fontSize: 11, color: T.textMuted, fontFamily: fontMono, minWidth: 100 }}>{c.phone || "—"}</div>
+              <div style={{ fontSize: 11, color: T.accent, minWidth: 140, overflow: "hidden", textOverflow: "ellipsis" }}>{c.email || "—"}</div>
+              <div style={{ fontSize: 10, color: T.textDim, minWidth: 80 }}>{c.license_number ? `CC: ${c.license_number}` : "—"}</div>
+              <button onClick={() => handleEdit(c)} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, padding: 5, cursor: "pointer", display: "flex" }}><Icon d={Icons.edit} size={12} color={T.textMuted} /></button>
+              <button onClick={() => handleDelete(c)} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, padding: 5, cursor: "pointer", display: "flex" }}><Icon d={Icons.x} size={12} color={T.textDim} /></button>
+            </div>
+          );
+        })}
+        {filtered.length === 0 && <div style={{ padding: 24, textAlign: "center", fontSize: 13, color: T.textDim }}>Nenhum contacto encontrado.</div>}
       </div>
     </div>
   );
@@ -907,9 +1190,11 @@ function AvailabilityView({ cars, onSelect }) {
 }
 
 // ═══ CALENDAR / GANTT VIEW ═══
-function CalendarView({ cars, onSelect }) {
+function CalendarView({ cars, damages, onSelect }) {
   const today = new Date();
-  const [startOffset, setStartOffset] = useState(0); // weeks offset from current week
+  const [startOffset, setStartOffset] = useState(0);
+  const [tooltip, setTooltip] = useState(null);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const weeksVisible = 4;
   const ref = useRef(null);
 
@@ -983,8 +1268,11 @@ function CalendarView({ cars, onSelect }) {
               const rowLoans = (car.history || []).filter(h => h.end >= firstDay && h.start <= lastDay);
               return (
                 <div key={car.id} style={{ display: "flex", borderBottom: `1px solid ${T.border}`, minHeight: 36 }}>
-                  <div onClick={() => onSelect(car.id)} style={{ width: labelW, minWidth: labelW, padding: "6px 14px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", position: "sticky", left: 0, background: T.surface, zIndex: 1, borderRight: `1px solid ${T.border}` }}
-                    onMouseEnter={e => e.currentTarget.style.background = T.surfaceHover} onMouseLeave={e => e.currentTarget.style.background = T.surface}>
+                  <div onClick={() => onSelect(car.id)}
+                    onMouseEnter={e => { const r = e.currentTarget.getBoundingClientRect(); setTooltip(car); setTooltipPos({ x: r.right + 8, y: r.top }); }}
+                    onMouseLeave={() => setTooltip(null)}
+                    style={{ width: labelW, minWidth: labelW, padding: "6px 14px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", position: "sticky", left: 0, background: T.surface, zIndex: 1, borderRight: `1px solid ${T.border}` }}
+                    onMouseOver={e => e.currentTarget.style.background = T.surfaceHover} onMouseOut={e => e.currentTarget.style.background = T.surface}>
                     <div>
                       <div style={{ fontSize: 11, fontWeight: 600, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: labelW - 30 }}>{car.model}</div>
                       <div style={{ fontSize: 10, color: T.textDim, fontFamily: fontMono }}>{car.plate}</div>
@@ -1023,6 +1311,33 @@ function CalendarView({ cars, onSelect }) {
           </div>
         </div>
       </div>
+      {/* Tooltip */}
+      {tooltip && (
+        <div style={{ position: "fixed", left: Math.min(tooltipPos.x, window.innerWidth - 320), top: Math.max(tooltipPos.y - 20, 10), background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "16px 18px", zIndex: 100, width: 290, pointerEvents: "none", boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 8, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon d={Icons.car} size={17} color={T.accent} /></div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{tooltip.model}</div>
+              <div style={{ fontSize: 11, color: T.textMuted, fontFamily: fontMono }}>{tooltip.plate}</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px", fontSize: 11 }}>
+            <div><span style={{ color: T.textDim }}>Combustível:</span> <span style={{ color: T.text }}>{tooltip.fuel}</span></div>
+            <div><span style={{ color: T.textDim }}>Km:</span> <span style={{ color: T.text, fontFamily: fontMono }}>{(tooltip.km || 0).toLocaleString("pt-PT")}</span></div>
+            <div><span style={{ color: T.textDim }}>Local:</span> <span style={{ color: T.text }}>{tooltip.location}</span></div>
+            <div><span style={{ color: T.textDim }}>Cor:</span> <span style={{ color: T.text }}>{tooltip.colorExt}</span></div>
+            <div><span style={{ color: T.textDim }}>Estado:</span> <span style={{ color: tooltip.status === "Emprestado" ? T.busy : T.free }}>{tooltip.status}</span></div>
+            <div><span style={{ color: T.textDim }}>VIN:</span> <span style={{ color: T.textMuted, fontFamily: fontMono, fontSize: 9 }}>{(tooltip.vin || "—").slice(0, 12)}...</span></div>
+          </div>
+          {(() => { const carDmg = (damages || []).filter(d => d.car_id === tooltip.id && d.status === "Aberto"); const totalLoans = (tooltip.history || []).length; return (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${T.border}`, fontSize: 11, display: "flex", gap: 12 }}>
+              <span><span style={{ color: T.textDim }}>Danos ativos:</span> <span style={{ color: carDmg.length > 0 ? T.danger : T.textMuted, fontWeight: carDmg.length > 0 ? 600 : 400 }}>{carDmg.length}</span></span>
+              <span><span style={{ color: T.textDim }}>Empréstimos:</span> <span style={{ color: T.text }}>{totalLoans}</span></span>
+            </div>
+          ); })()}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: T.textMuted }}>
         <span>Hoje: <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: T.accentSoft, border: `1px solid ${T.accent}`, verticalAlign: "middle" }} /></span>
         <span>Fim-de-semana: <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "rgba(255,255,255,0.03)", border: `1px solid ${T.border}`, verticalAlign: "middle" }} /></span>
