@@ -512,14 +512,24 @@ function Dashboard({ user, onLogout }) {
           {["Todos", ...locations].map(l => <Btn key={l} small active={filterLoc === l} onClick={() => setFilterLoc(l)}>{l}</Btn>)}
         </div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-          {[{ v: "list", d: "M4 6h16M4 12h16M4 18h16" }, { v: "grid", d: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" }, { v: "stats", d: Icons.chart }].map(({ v, d }) => (
-            <Btn key={v} small active={view === v} onClick={() => setView(v)}><Icon d={d} size={14} color={view === v ? T.accent : T.textMuted} /></Btn>
+          {[
+            { v: "list", d: "M4 6h16M4 12h16M4 18h16", tip: "Lista" },
+            { v: "grid", d: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z", tip: "Grelha" },
+            { v: "calendar", d: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z", tip: "Calendário" },
+            { v: "availability", d: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 8v6M7 11h6", tip: "Disponibilidade" },
+            { v: "stats", d: Icons.chart, tip: "Estatísticas" },
+          ].map(({ v, d, tip }) => (
+            <Btn key={v} small active={view === v} onClick={() => setView(v)} title={tip}><Icon d={d} size={14} color={view === v ? T.accent : T.textMuted} /></Btn>
           ))}
         </div>
       </div>
 
       <div className="hpi-content" style={{ padding: "0 28px 40px" }}>
-        {view === "stats" ? <StatsView stats={stats} cars={cars} /> : view === "grid" ? <GridView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} /> : <ListView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} />}
+        {view === "stats" ? <StatsView stats={stats} cars={cars} /> :
+         view === "calendar" ? <CalendarView cars={cars.filter(c => c.status !== "Inativo")} onSelect={setSelectedCar} /> :
+         view === "availability" ? <AvailabilityView cars={cars.filter(c => c.status !== "Inativo")} onSelect={setSelectedCar} /> :
+         view === "grid" ? <GridView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} /> :
+         <ListView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} />}
       </div>
     </div>
   );
@@ -774,6 +784,249 @@ function CarDetail({ car, onBack, canEdit, isAdmin, onDismissMaint, onEdit, onUp
             </div>
           ); })}</div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ═══ AVAILABILITY SEARCH ═══
+function AvailabilityView({ cars, onSelect }) {
+  const [from, setFrom] = useState(new Date().toISOString().split("T")[0]);
+  const [to, setTo] = useState("");
+  const [fuelFilter, setFuelFilter] = useState("Todos");
+  const [locFilter, setLocFilter] = useState("Todos");
+
+  const allFuels = [...new Set(cars.map(c => c.fuel).filter(Boolean))];
+  const allLocs = [...new Set(cars.map(c => c.location).filter(Boolean))];
+
+  const results = useMemo(() => {
+    if (!from) return [];
+    const endDate = to || from;
+    return cars.filter(car => {
+      if (fuelFilter !== "Todos" && car.fuel !== fuelFilter) return false;
+      if (locFilter !== "Todos" && car.location !== locFilter) return false;
+      const busy = (car.history || []).some(h => {
+        return h.start <= endDate && (h.end || h.start) >= from;
+      });
+      return !busy;
+    });
+  }, [cars, from, to, fuelFilter, locFilter]);
+
+  const busyCars = useMemo(() => {
+    if (!from) return [];
+    const endDate = to || from;
+    return cars.filter(car => {
+      if (fuelFilter !== "Todos" && car.fuel !== fuelFilter) return false;
+      if (locFilter !== "Todos" && car.location !== locFilter) return false;
+      return (car.history || []).some(h => h.start <= endDate && (h.end || h.start) >= from);
+    }).map(car => {
+      const conflicts = (car.history || []).filter(h => h.start <= endDate && (h.end || h.start) >= from);
+      return { ...car, conflicts };
+    });
+  }, [cars, from, to, fuelFilter, locFilter]);
+
+  return (
+    <div>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: "20px 24px", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+          <Icon d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" size={18} color={T.accent} />
+          <span style={{ fontSize: 16, fontWeight: 700 }}>Pesquisa de Disponibilidade</span>
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div style={{ minWidth: 140 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>De</label>
+            <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: fontMono, outline: "none" }} />
+          </div>
+          <div style={{ minWidth: 140 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Até</label>
+            <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: fontMono, outline: "none" }} />
+          </div>
+          <div style={{ minWidth: 120 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Combustível</label>
+            <select value={fuelFilter} onChange={e => setFuelFilter(e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }}>
+              <option value="Todos">Todos</option>{allFuels.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
+          <div style={{ minWidth: 120 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.textDim, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>Localização</label>
+            <select value={locFilter} onChange={e => setLocFilter(e.target.value)} style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 12px", color: T.text, fontSize: 13, fontFamily: font, outline: "none" }}>
+              <option value="Todos">Todos</option>{allLocs.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </div>
+        </div>
+        {from && <div style={{ marginTop: 14, fontSize: 13, color: T.textMuted }}>
+          Período: <strong style={{ color: T.text }}>{fmtD(from)}</strong>{to && <> → <strong style={{ color: T.text }}>{fmtD(to)}</strong></>}
+          {" · "}<strong style={{ color: T.free }}>{results.length} disponíveis</strong>{" · "}<strong style={{ color: T.busy }}>{busyCars.length} ocupados</strong>
+        </div>}
+      </div>
+
+      {from && <>
+        {results.length > 0 && <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.free, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <Icon d={Icons.check} size={14} color={T.free} />Disponíveis ({results.length})
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+            {results.map(car => (
+              <div key={car.id} onClick={() => onSelect(car.id)} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer", transition: "border-color 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = T.free} onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{car.model}</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontFamily: fontMono, fontSize: 11, color: T.textMuted }}>{car.plate}</span>
+                  <span style={{ fontSize: 10, color: T.textDim, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)" }}>{car.fuel}</span>
+                  <LocationBadge loc={car.location} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>}
+
+        {busyCars.length > 0 && <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.busy, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <Icon d={Icons.clock} size={14} color={T.busy} />Ocupados ({busyCars.length})
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+            {busyCars.map(car => (
+              <div key={car.id} onClick={() => onSelect(car.id)} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer", opacity: 0.6 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{car.model}</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontFamily: fontMono, fontSize: 11, color: T.textMuted }}>{car.plate}</span>
+                  <span style={{ fontSize: 10, color: T.textDim, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)" }}>{car.fuel}</span>
+                </div>
+                {car.conflicts.map((c, i) => (
+                  <div key={i} style={{ fontSize: 11, color: T.busy, marginTop: 2 }}>
+                    {c.borrower} ({fmtD(c.start)} → {fmtD(c.end)})
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>}
+      </>}
+    </div>
+  );
+}
+
+// ═══ CALENDAR / GANTT VIEW ═══
+function CalendarView({ cars, onSelect }) {
+  const today = new Date();
+  const [startOffset, setStartOffset] = useState(0); // weeks offset from current week
+  const weeksVisible = 4;
+  const ref = useRef(null);
+
+  // Build date range
+  const startOfWeek = (d) => { const r = new Date(d); r.setDate(r.getDate() - ((r.getDay() + 6) % 7)); r.setHours(0,0,0,0); return r; };
+  const baseMonday = startOfWeek(today);
+  baseMonday.setDate(baseMonday.getDate() + startOffset * 7);
+  const totalDays = weeksVisible * 7;
+  const days = [];
+  for (let i = 0; i < totalDays; i++) {
+    const d = new Date(baseMonday);
+    d.setDate(d.getDate() + i);
+    days.push(d);
+  }
+  const dStr = (d) => d.toISOString().split("T")[0];
+  const firstDay = dStr(days[0]);
+  const lastDay = dStr(days[days.length - 1]);
+
+  // Group days by month for header
+  const months = [];
+  let curMonth = null;
+  days.forEach((d, i) => {
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (key !== curMonth) { months.push({ label: MN[d.getMonth()] + " " + d.getFullYear(), start: i, count: 1 }); curMonth = key; }
+    else { months[months.length - 1].count++; }
+  });
+
+  const cellW = 32;
+  const labelW = 200;
+  const todayStr = dStr(today);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" size={18} color={T.accent} />
+          <span style={{ fontSize: 16, fontWeight: 700 }}>Calendário de Marcações</span>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <Btn small onClick={() => setStartOffset(p => p - weeksVisible)}>← {weeksVisible} sem</Btn>
+          <Btn small onClick={() => setStartOffset(0)} active={startOffset === 0}>Hoje</Btn>
+          <Btn small onClick={() => setStartOffset(p => p + weeksVisible)}>{weeksVisible} sem →</Btn>
+        </div>
+      </div>
+
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }} ref={ref}>
+          <div style={{ minWidth: labelW + totalDays * cellW }}>
+            {/* Month header */}
+            <div style={{ display: "flex", borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ width: labelW, minWidth: labelW, padding: "8px 14px", fontSize: 11, fontWeight: 600, color: T.textDim, position: "sticky", left: 0, background: T.surface, zIndex: 2 }}>VIATURA</div>
+              {months.map((m, i) => (
+                <div key={i} style={{ width: m.count * cellW, textAlign: "center", padding: "8px 0", fontSize: 11, fontWeight: 600, color: T.textMuted, borderLeft: `1px solid ${T.border}` }}>{m.label}</div>
+              ))}
+            </div>
+            {/* Day header */}
+            <div style={{ display: "flex", borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ width: labelW, minWidth: labelW, position: "sticky", left: 0, background: T.surface, zIndex: 2 }} />
+              {days.map((d, i) => {
+                const isToday = dStr(d) === todayStr;
+                const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                return (
+                  <div key={i} style={{ width: cellW, minWidth: cellW, textAlign: "center", padding: "4px 0", fontSize: 10, color: isToday ? T.accent : isWeekend ? T.textDim : T.textMuted, fontWeight: isToday ? 700 : 400, fontFamily: fontMono, background: isToday ? T.accentSoft : isWeekend ? "rgba(255,255,255,0.02)" : "transparent", borderLeft: d.getDate() === 1 ? `1px solid ${T.border}` : "none" }}>
+                    {d.getDate()}
+                  </div>
+                );
+              })}
+            </div>
+            {/* Car rows */}
+            {cars.map(car => {
+              const rowLoans = (car.history || []).filter(h => h.end >= firstDay && h.start <= lastDay);
+              return (
+                <div key={car.id} style={{ display: "flex", borderBottom: `1px solid ${T.border}`, minHeight: 36 }}>
+                  <div onClick={() => onSelect(car.id)} style={{ width: labelW, minWidth: labelW, padding: "6px 14px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", position: "sticky", left: 0, background: T.surface, zIndex: 1, borderRight: `1px solid ${T.border}` }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.surfaceHover} onMouseLeave={e => e.currentTarget.style.background = T.surface}>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: labelW - 30 }}>{car.model}</div>
+                      <div style={{ fontSize: 10, color: T.textDim, fontFamily: fontMono }}>{car.plate}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", position: "relative", flex: 1 }}>
+                    {days.map((d, i) => {
+                      const ds = dStr(d);
+                      const isToday = ds === todayStr;
+                      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                      return <div key={i} style={{ width: cellW, minWidth: cellW, height: "100%", background: isToday ? "rgba(62,106,225,0.06)" : isWeekend ? "rgba(255,255,255,0.015)" : "transparent", borderLeft: d.getDate() === 1 ? `1px solid ${T.border}` : "none" }} />;
+                    })}
+                    {/* Loan bars */}
+                    {rowLoans.map((loan, li) => {
+                      const ls = new Date(loan.start);
+                      const le = new Date(loan.end || loan.start);
+                      const visStart = ls < days[0] ? days[0] : ls;
+                      const visEnd = le > days[days.length - 1] ? days[days.length - 1] : le;
+                      const startIdx = Math.round((visStart - days[0]) / 86400000);
+                      const endIdx = Math.round((visEnd - days[0]) / 86400000);
+                      if (startIdx > totalDays || endIdx < 0) return null;
+                      const left = Math.max(0, startIdx) * cellW;
+                      const width = (Math.min(endIdx, totalDays - 1) - Math.max(0, startIdx) + 1) * cellW - 2;
+                      const colors = [T.accent, "#8b5cf6", "#06b6d4", "#ec4899", "#f59e0b", "#22c55e", "#ef4444"];
+                      const color = colors[li % colors.length];
+                      return (
+                        <div key={li} title={`${loan.borrower}\n${fmtD(loan.start)} → ${fmtD(loan.end)}`} style={{ position: "absolute", left, top: 4, width: Math.max(width, 4), height: 28, background: color + "30", border: `1px solid ${color}60`, borderRadius: 4, display: "flex", alignItems: "center", padding: "0 4px", overflow: "hidden", cursor: "default" }}>
+                          <span style={{ fontSize: 9, fontWeight: 600, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{loan.borrower}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: T.textMuted }}>
+        <span>Hoje: <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: T.accentSoft, border: `1px solid ${T.accent}`, verticalAlign: "middle" }} /></span>
+        <span>Fim-de-semana: <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "rgba(255,255,255,0.03)", border: `1px solid ${T.border}`, verticalAlign: "middle" }} /></span>
+        <span>Marcação: <span style={{ display: "inline-block", width: 20, height: 10, borderRadius: 2, background: T.accent + "30", border: `1px solid ${T.accent}60`, verticalAlign: "middle" }} /></span>
       </div>
     </div>
   );
