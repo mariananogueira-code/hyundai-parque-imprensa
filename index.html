@@ -631,9 +631,9 @@ function Dashboard({ user, onLogout }) {
       </div>
 
       <div className="hpi-content" style={{ padding: "0 28px 40px" }}>
-        {view === "stats" ? <StatsView stats={stats} cars={cars} /> :
-         view === "calendar" ? <CalendarView cars={cars.filter(c => c.status !== "Inativo")} damages={damages} onSelect={setSelectedCar} /> :
-         view === "availability" ? <AvailabilityView cars={cars.filter(c => c.status !== "Inativo")} onSelect={setSelectedCar} /> :
+        {view === "stats" ? <StatsView stats={stats} cars={carsWithStatus} /> :
+         view === "calendar" ? <CalendarView cars={filtered.filter(c => (c.displayStatus || c.status) !== "Inativo")} damages={damages} onSelect={setSelectedCar} /> :
+         view === "availability" ? <AvailabilityView cars={filtered.filter(c => (c.displayStatus || c.status) !== "Inativo")} onSelect={setSelectedCar} /> :
          view === "grid" ? <GridView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} /> :
          <ListView cars={filtered} onSelect={setSelectedCar} onEdit={canEdit ? (c => { setEditingCar(c); setShowForm(true); }) : null} />}
       </div>
@@ -1382,7 +1382,7 @@ function CalendarView({ cars, damages, onSelect }) {
             <div><span style={{ color: T.textDim }}>Km:</span> <span style={{ color: T.text, fontFamily: fontMono }}>{(tooltip.km || 0).toLocaleString("pt-PT")}</span></div>
             <div><span style={{ color: T.textDim }}>Local:</span> <span style={{ color: T.text }}>{tooltip.location}</span></div>
             <div><span style={{ color: T.textDim }}>Cor:</span> <span style={{ color: T.text }}>{tooltip.colorExt}</span></div>
-            <div><span style={{ color: T.textDim }}>Estado:</span> <span style={{ color: tooltip.status === "Emprestado" ? T.busy : T.free }}>{tooltip.status}</span></div>
+            <div><span style={{ color: T.textDim }}>Estado:</span> <span style={{ color: statusColor(tooltip.displayStatus || tooltip.status) }}>{tooltip.displayStatus || tooltip.status}</span></div>
             <div><span style={{ color: T.textDim }}>VIN:</span> <span style={{ color: T.textMuted, fontFamily: fontMono, fontSize: 9 }}>{(tooltip.vin || "—").slice(0, 12)}...</span></div>
           </div>
           {(() => { const carDmg = (damages || []).filter(d => d.car_id === tooltip.id && d.status === "Aberto"); const totalLoans = (tooltip.history || []).length; return (
