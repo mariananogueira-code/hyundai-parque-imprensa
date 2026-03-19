@@ -42,7 +42,7 @@ const { useState, useMemo, useEffect, useRef, useCallback } = React;
 
 
 const DEFAULT_LOCATIONS = ["CE Lisboa", "CE Gaia", "CAP"];
-const STATUSES = ["Livre", "Emprestado", "Inativo"];
+const STATUSES = ["Livre", "Emprestado", "Em Preparação", "Inativo"];
 const FUEL_TYPES = ["Elétrico", "Gasolina", "Diesel", "Híbrido", "Híbrido Plug-in"];
 const COLORS_EXT = ["Branco", "Preto", "Cinzento", "Azul", "Vermelho", "Verde", "Castanho", "Prata", "Laranja"];
 const COLORS_INT = ["Preto", "Cinzento", "Castanho", "Bege", "Branco"];
@@ -57,9 +57,9 @@ function getMaintenanceStatus(car) {
   const km = car.km || 0;
   const kmSinceService = km - lastSvc;
   // If maintenance was dismissed at current km level, don't show alert
-  if (car.maintDismissedAtKm && car.maintDismissedAtKm >= lastSvc + 9000) return null;
-  if (kmSinceService >= 10000) return { type: "danger", msg: `Manutenção ultrapassada — ${(kmSinceService - 10000).toLocaleString("pt-PT")} km acima` };
-  if (kmSinceService >= 9000) return { type: "warning", msg: `Manutenção próxima — faltam ${(10000 - kmSinceService).toLocaleString("pt-PT")} km` };
+  if (car.maintDismissedAtKm && car.maintDismissedAtKm >= lastSvc + 13000) return null;
+  if (kmSinceService >= 15000) return { type: "danger", msg: `Manutenção ultrapassada — ${(kmSinceService - 15000).toLocaleString("pt-PT")} km acima` };
+  if (kmSinceService >= 13000) return { type: "warning", msg: `Manutenção próxima — faltam ${(15000 - kmSinceService).toLocaleString("pt-PT")} km` };
   return null;
 }
 
@@ -71,6 +71,7 @@ const T = {
   free: "#22c55e", freeSoft: "rgba(34,197,94,0.1)", freeBorder: "rgba(34,197,94,0.25)",
   busy: "#f59e0b", busySoft: "rgba(245,158,11,0.1)", busyBorder: "rgba(245,158,11,0.25)",
   inactive: "#64748b", inactiveSoft: "rgba(100,116,139,0.1)", inactiveBorder: "rgba(100,116,139,0.25)",
+  prep: "#8b5cf6", prepSoft: "rgba(139,92,246,0.1)", prepBorder: "rgba(139,92,246,0.25)",
   danger: "#ef4444", dangerSoft: "rgba(239,68,68,0.08)", dangerBorder: "rgba(239,68,68,0.25)",
   warnSoft: "rgba(245,158,11,0.08)", warnBorder: "rgba(245,158,11,0.25)",
 };
@@ -120,10 +121,11 @@ const Badge = ({ children, color, bg, border }) => (
 const StatusBadge = ({ status }) => {
   if (status === "Livre") return <Badge color={T.free} bg={T.freeSoft} border={T.freeBorder}>Livre</Badge>;
   if (status === "Emprestado") return <Badge color={T.busy} bg={T.busySoft} border={T.busyBorder}>Emprestado</Badge>;
+  if (status === "Em Preparação") return <Badge color={T.prep} bg={T.prepSoft} border={T.prepBorder}>Em Preparação</Badge>;
   return <Badge color={T.inactive} bg={T.inactiveSoft} border={T.inactiveBorder}>Inativo</Badge>;
 };
-const statusColor = (s) => s === "Livre" ? T.free : s === "Emprestado" ? T.busy : T.inactive;
-const statusSoft = (s) => s === "Livre" ? T.freeSoft : s === "Emprestado" ? T.busySoft : T.inactiveSoft;
+const statusColor = (s) => s === "Livre" ? T.free : s === "Emprestado" ? T.busy : s === "Em Preparação" ? T.prep : T.inactive;
+const statusSoft = (s) => s === "Livre" ? T.freeSoft : s === "Emprestado" ? T.busySoft : s === "Em Preparação" ? T.prepSoft : T.inactiveSoft;
 
 const LocationBadge = ({ loc }) => loc ? (
   <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 500, color: T.textMuted, background: "rgba(255,255,255,0.04)", border: `1px solid ${T.border}`, fontFamily: font }}>
@@ -168,6 +170,46 @@ const DetailField = ({ label, value, mono, accent }) => (
 );
 
 function fmtD(d) { if (!d) return "—"; const p = d.split("-"); return `${p[2]}/${p[1]}/${p[0]}`; }
+
+// Count business days between two dates (exclusive of both)
+function countBusinessDays(startStr, endStr) {
+  const s = new Date(startStr); const e = new Date(endStr);
+  let count = 0;
+  const d = new Date(s); d.setDate(d.getDate() + 1);
+  while (d < e) { const dow = d.getDay(); if (dow !== 0 && dow !== 6) count++; d.setDate(d.getDate() + 1); }
+  return count;
+}
+
+// Calculate effective status for a car based on today and loan history
+function getEffectiveStatus(car) {
+  if (car.status === "Inativo") return "Inativo";
+  const today = new Date().toISOString().split("T")[0];
+  const history = (car.history || []).sort((a, b) => a.start.localeCompare(b.start));
+
+  // Check if currently in a loan
+  const currentLoan = history.find(h => h.start <= today && (h.end || h.start) >= today);
+  if (currentLoan) return "Emprestado";
+
+  // Find the most recent past loan and next future loan
+  const pastLoans = history.filter(h => (h.end || h.start) < today);
+  const futureLoans = history.filter(h => h.start > today);
+  const lastLoan = pastLoans.length > 0 ? pastLoans[pastLoans.length - 1] : null;
+  const nextLoan = futureLoans.length > 0 ? futureLoans[0] : null;
+
+  // Check gap after last loan ended
+  if (lastLoan) {
+    const gapAfter = countBusinessDays(lastLoan.end || lastLoan.start, today);
+    if (gapAfter <= 2) return "Em Preparação";
+  }
+
+  // Check gap before next loan starts
+  if (nextLoan) {
+    const gapBefore = countBusinessDays(today, nextLoan.start);
+    if (gapBefore <= 2) return "Em Preparação";
+  }
+
+  return "Livre";
+}
 const MN = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const LC = ["#3e6ae1", "#8b5cf6", "#06b6d4", "#ec4899", "#f59e0b", "#22c55e", "#ef4444", "#64748b"];
 
@@ -440,17 +482,30 @@ function Dashboard({ user, onLogout }) {
   useEffect(() => { Promise.all([loadCars(), loadLocations(), loadContacts(), loadDamages()]).then(([c, l, ct, dm]) => { setCars(c); setLocations(l); setContacts(ct); setDamages(dm); setLoaded(true); }); }, []);
   // Data is saved per-operation to Supabase
 
-  const activeCars = useMemo(() => showInactive ? cars : cars.filter(c => c.status !== "Inativo"), [cars, showInactive]);
+  // Compute effective status for each car
+  const carsWithStatus = useMemo(() => cars.map(c => {
+    if (c.status === "Inativo") return c;
+    const eff = getEffectiveStatus(c);
+    return { ...c, displayStatus: eff };
+  }), [cars]);
+
+  const activeCars = useMemo(() => {
+    const list = showInactive ? carsWithStatus : carsWithStatus.filter(c => c.status !== "Inativo");
+    return list;
+  }, [carsWithStatus, showInactive]);
   const filtered = useMemo(() => activeCars.filter(c => {
     const q = search.toLowerCase();
+    const st = c.displayStatus || c.status;
     const ms = !q || c.model.toLowerCase().includes(q) || c.plate.toLowerCase().includes(q) || c.borrower?.toLowerCase().includes(q) || (c.history || []).some(h => h.borrower?.toLowerCase().includes(q));
-    return ms && (filterStatus === "Todos" || c.status === filterStatus) && (filterLoc === "Todos" || c.location === filterLoc);
+    return ms && (filterStatus === "Todos" || st === filterStatus) && (filterLoc === "Todos" || c.location === filterLoc);
   }), [activeCars, search, filterStatus, filterLoc]);
 
   const stats = useMemo(() => {
-    const active = cars.filter(c => c.status !== "Inativo");
-    const total = active.length; const free = active.filter(c => c.status === "Livre").length;
-    const busy = active.filter(c => c.status === "Emprestado").length;
+    const active = carsWithStatus.filter(c => c.status !== "Inativo");
+    const total = active.length;
+    const free = active.filter(c => c.displayStatus === "Livre").length;
+    const busy = active.filter(c => c.displayStatus === "Emprestado").length;
+    const prep = active.filter(c => c.displayStatus === "Em Preparação").length;
     const inactive = cars.filter(c => c.status === "Inativo").length;
     const avgKm = total > 0 ? Math.round(active.reduce((a, c) => a + (c.km || 0), 0) / total) : 0;
     const byLoc = {}; active.forEach(c => { byLoc[c.location] = (byLoc[c.location] || 0) + 1; });
@@ -546,6 +601,7 @@ function Dashboard({ user, onLogout }) {
         <StatCard label="Ativas" value={stats.total} sub={`${stats.free} livres`} icon={Icons.car} onClick={() => { setFilterStatus("Todos"); setShowInactive(false); }} active={filterStatus === "Todos" && !showInactive} />
         <StatCard label="Livres" value={stats.free} sub={`${stats.total > 0 ? Math.round(stats.free / stats.total * 100) : 0}%`} icon={Icons.check} color={T.free} onClick={() => { handleStatClick("Livre"); setShowInactive(false); }} active={filterStatus === "Livre"} />
         <StatCard label="Emprestados" value={stats.busy} sub={`${stats.total > 0 ? Math.round(stats.busy / stats.total * 100) : 0}%`} icon={Icons.clock} color={T.busy} onClick={() => { handleStatClick("Emprestado"); setShowInactive(false); }} active={filterStatus === "Emprestado"} />
+        {stats.prep > 0 && <StatCard label="Em Preparação" value={stats.prep} sub="intervalo ≤ 2 dias" icon={Icons.wrench} color={T.prep} onClick={() => { handleStatClick("Em Preparação"); setShowInactive(false); }} active={filterStatus === "Em Preparação"} />}
         <StatCard label={`Ocupação ${stats.lmLabel}`} value={`${stats.lmRate}%`} sub={`~${stats.lmAvgDays} dias/viatura em ${stats.lmDaysInMonth} dias`} icon={Icons.chart} color="#8b5cf6" />
         <StatCard label="Inativas" value={stats.inactive} sub="fora do parque" icon={Icons.archive} color={T.inactive} onClick={() => { setShowInactive(true); setFilterStatus("Inativo"); }} active={filterStatus === "Inativo"} />
       </div>
@@ -556,7 +612,7 @@ function Dashboard({ user, onLogout }) {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar modelo, matrícula, jornalista..." style={{ background: "none", border: "none", outline: "none", color: T.text, fontSize: 13, fontFamily: font, padding: "9px 0", width: "100%" }} />
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          {["Todos", "Livre", "Emprestado", "Inativo"].map(s => <Btn key={s} small active={filterStatus === s} onClick={() => { setFilterStatus(s); if (s === "Inativo") setShowInactive(true); }}>{s}</Btn>)}
+          {["Todos", "Livre", "Emprestado", "Em Preparação", "Inativo"].map(s => <Btn key={s} small active={filterStatus === s} onClick={() => { setFilterStatus(s); if (s === "Inativo") setShowInactive(true); }}>{s}</Btn>)}
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {["Todos", ...locations].map(l => <Btn key={l} small active={filterLoc === l} onClick={() => setFilterLoc(l)}>{l}</Btn>)}
@@ -600,7 +656,7 @@ function ListView({ cars, onSelect, onEdit }) {
           <div key={car.id} onClick={() => onSelect(car.id)} className="hpi-list-grid" style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.8fr 0.8fr 0.8fr 0.7fr auto", padding: "14px 20px", borderBottom: `1px solid ${T.border}`, cursor: "pointer", alignItems: "center", transition: "background 0.1s", opacity: isInactive ? 0.55 : 1 }}
             onMouseEnter={e => e.currentTarget.style.background = T.surfaceHover} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 34, height: 34, borderRadius: 8, background: statusSoft(car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon d={Icons.car} size={17} color={statusColor(car.status)} /></div>
+              <div style={{ width: 34, height: 34, borderRadius: 8, background: statusSoft(car.displayStatus || car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon d={Icons.car} size={17} color={statusColor(car.displayStatus || car.status)} /></div>
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{car.model}</span>
@@ -609,7 +665,7 @@ function ListView({ cars, onSelect, onEdit }) {
                 <span style={{ fontFamily: fontMono, fontSize: 11, color: T.textMuted }}>{car.plate}</span>
               </div>
             </div>
-            <div><StatusBadge status={car.status} /></div>
+            <div><StatusBadge status={car.displayStatus || car.status} /></div>
             <div className="hpi-list-hide-mobile"><LocationBadge loc={car.location} /></div>
             <div className="hpi-list-hide-mobile" style={{ fontSize: 12, color: T.textMuted }}>{car.fuel || "—"}</div>
             <div className="hpi-list-hide-mobile" style={{ fontSize: 13, color: T.textMuted, fontFamily: fontMono }}>{(car.km || 0).toLocaleString("pt-PT")}</div>
@@ -636,10 +692,10 @@ function GridView({ cars, onSelect, onEdit }) {
             onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}>
             {onEdit && <div style={{ position: "absolute", top: 14, right: 14 }}><button onClick={e => { e.stopPropagation(); onEdit(car); }} style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${T.border}`, borderRadius: 6, padding: 5, cursor: "pointer", display: "flex" }}><Icon d={Icons.edit} size={13} color={T.textMuted} /></button></div>}
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-              <div style={{ width: 44, height: 44, borderRadius: 12, background: statusSoft(car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon d={Icons.car} size={22} color={statusColor(car.status)} /></div>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: statusSoft(car.displayStatus || car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon d={Icons.car} size={22} color={statusColor(car.displayStatus || car.status)} /></div>
               <div><div style={{ fontSize: 15, fontWeight: 700 }}>{car.model}</div><span style={{ fontFamily: fontMono, fontSize: 12, color: T.textMuted }}>{car.plate}</span></div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" }}><StatusBadge status={car.status} /><LocationBadge loc={car.location} />{maint && <MaintBadge alert={maint} />}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" }}><StatusBadge status={car.displayStatus || car.status} /><LocationBadge loc={car.location} />{maint && <MaintBadge alert={maint} />}</div>
             <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: 12, color: T.textMuted }}>{(car.km || 0).toLocaleString("pt-PT")} km · {car.fuel || "—"}</span><span style={{ fontSize: 11, color: T.textDim }}>{car.colorExt}/{car.colorInt}</span></div>
             {car.status === "Emprestado" && car.borrower && <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 12, color: T.busy }}><span style={{ fontWeight: 600 }}>{car.borrower}</span><div style={{ color: T.textDim, marginTop: 2 }}>{fmtD(car.borrowStart)} → {fmtD(car.borrowEnd)}</div></div>}
             {isInactive && car.inactiveReason && <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 12, color: T.inactive }}><span style={{ fontWeight: 600 }}>{car.inactiveReason}</span>{car.inactiveDate && <div style={{ color: T.textDim, marginTop: 2 }}>Desde {fmtD(car.inactiveDate)}</div>}</div>}
@@ -766,7 +822,7 @@ function CarDetail({ car, onBack, canEdit, isAdmin, onDismissMaint, onEdit, onUp
           <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0 }}>{car.model}</h1>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
             <span style={{ fontFamily: fontMono, fontSize: 14, color: T.textMuted, background: "rgba(255,255,255,0.04)", padding: "3px 10px", borderRadius: 6 }}>{car.plate}</span>
-            <StatusBadge status={car.status} /><LocationBadge loc={car.location} />
+            <StatusBadge status={car.displayStatus || car.status} /><LocationBadge loc={car.location} />
             {car.fuel && <span style={{ fontSize: 11, color: T.textMuted, background: "rgba(255,255,255,0.04)", padding: "3px 8px", borderRadius: 5, border: `1px solid ${T.border}` }}>{car.fuel}</span>}
             {isAdmin && <button onClick={onEdit} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 6, border: `1px solid ${T.border}`, background: "rgba(255,255,255,0.04)", color: T.textMuted, fontSize: 12, cursor: "pointer", fontFamily: font }}><Icon d={Icons.edit} size={13} color={T.textMuted} />Editar</button>}
           </div>
@@ -1426,7 +1482,7 @@ function CarForm({ car, locations, onSave, onCancel }) {
         <Inp label="Quilómetros" value={f.km} onChange={v => s("km", v)} type="number" half />
         <Sel label="Combustível" value={f.fuel} onChange={v => s("fuel", v)} options={FUEL_TYPES} half />
         <Inp label="Data de Matrícula" value={f.registrationDate} onChange={v => s("registrationDate", v)} type="date" half />
-        {f.fuel === "Gasolina" && <Inp label="Km da Última Revisão" value={f.lastServiceKm} onChange={v => s("lastServiceKm", v)} type="number" half hint="Para calcular a próxima manutenção (cada 10.000 km)" />}
+        {f.fuel === "Gasolina" && <Inp label="Km da Última Revisão" value={f.lastServiceKm} onChange={v => s("lastServiceKm", v)} type="number" half hint="Para calcular a próxima manutenção (cada 15.000 km)" />}
         <Sel label="Localização" value={f.location} onChange={v => s("location", v)} options={[...locations, ""]} half />
         <Sel label="Cor Exterior" value={f.colorExt} onChange={v => s("colorExt", v)} options={COLORS_EXT} half />
         <Sel label="Cor Interior" value={f.colorInt} onChange={v => s("colorInt", v)} options={COLORS_INT} half />
@@ -1820,8 +1876,8 @@ function ImportView({ locations, setLocations, cars, setCars, onBack }) {
             <div style={{ maxHeight: 350, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10 }}>
               {parsed.cars.map((car, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: `1px solid ${T.border}` }}>
-                  <div style={{ width: 30, height: 30, borderRadius: 8, background: statusSoft(car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <Icon d={Icons.car} size={15} color={statusColor(car.status)} />
+                  <div style={{ width: 30, height: 30, borderRadius: 8, background: statusSoft(car.displayStatus || car.status), display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Icon d={Icons.car} size={15} color={statusColor(car.displayStatus || car.status)} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{car.model}</div>
